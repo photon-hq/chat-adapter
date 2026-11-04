@@ -10,8 +10,9 @@
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
     "outDir": "./dist",
-    "types": ["node"]
+    "types": ["node"],
+    "paths": { "@photon-ai/chat-adapter": ["./src/index.ts"] }
   },
-  "include": ["src/**/*", "test/**/*"],
+  "include": ["src/**/*", "test/**/*", "examples/**/*"],
   "exclude": ["node_modules", "dist"]
 }
