@@ -107,6 +107,8 @@ Options passed to `createPhotonAdapter` take precedence over the environment.
 
 A thread is one Photon Space, as seen by one of your project's Agents (the line or account that received the message). Thread IDs look like `photon:<spaceId>:<agentUserId>:<spaceKind>`, so a reply always goes out from the Agent the message arrived on, even from a later invocation. Direct Spaces are DMs: they reach `onDirectMessage`, or count as mentions.
 
+Message authors use the sender's handle, or its user ID when a fallback user snapshot has no handle. `PhotonUser.handle` is optional; code reading the raw payload should use `handle ?? id` too.
+
 ## Features
 
 | Chat SDK | Photon |

@@ -21,21 +21,30 @@ const received: PhotonMessage = {
   status: "received",
   space: {
     id: SPACE,
+    projectId: PROJECT,
     kind: "direct",
     platform: "imessage",
     participantIds: [AGENT, PEER],
+    details: {},
+    metadata: {},
   },
   sentBy: {
     id: PEER,
+    projectId: PROJECT,
     handle: "+12025550102",
     kind: "contact",
     platform: "imessage",
+    details: {},
+    metadata: {},
   },
   receivedBy: {
     id: AGENT,
+    projectId: PROJECT,
     handle: "+12025550101",
     kind: "agent",
     platform: "imessage",
+    details: {},
+    metadata: {},
   },
   content: {
     type: "group",
@@ -45,6 +54,8 @@ const received: PhotonMessage = {
     ],
   },
   createdAt: "2026-11-04T10:00:01.000Z",
+  updatedAt: "2026-11-04T10:00:01.000Z",
+  metadata: {},
   timestamps: { receivedAt: "2026-11-04T10:00:00.000Z" },
 };
 
@@ -405,6 +416,41 @@ describe("startTyping", () => {
 });
 
 describe("fetchMessages", () => {
+  it("keeps the cursor when an Agent's history page has only ignored content", async () => {
+    const adapter = await setup();
+    fetchMock.mockImplementation((url: string) =>
+      new URL(url).searchParams.has("excludeContentTypes")
+        ? json(
+            {
+              code: "INVALID_REQUEST",
+              status: 400,
+              title: "Invalid Request",
+              type: "https://photon.codes/docs/problems/invalid-request",
+              detail: "excludeContentTypes requires resourceId",
+            },
+            400
+          )
+        : json({
+            items: [{ ...received, content: { type: "message.read" } }],
+            nextPageToken: "next.page",
+          })
+    );
+
+    const page = await adapter.fetchMessages(THREAD, {
+      cursor: "previous.page",
+      direction: "forward",
+    });
+
+    expect(Object.fromEntries(call(0).url.searchParams)).toEqual({
+      spaceId: SPACE,
+      perspectiveUserId: AGENT,
+      pageSize: "50",
+      order: "asc",
+      pageToken: "previous.page",
+    });
+    expect(page).toEqual({ messages: [], nextCursor: "next.page" });
+  });
+
   it("reads the Agent's view of the Space, oldest first", async () => {
     const adapter = await setup();
     const reply: PhotonMessage = {
@@ -437,7 +483,6 @@ describe("fetchMessages", () => {
       perspectiveUserId: AGENT,
       pageSize: "2",
       order: "desc",
-      excludeContentTypes: "message.read,space.typing.update",
     });
     expect(page.nextCursor).toBe("abc.def");
     expect(
@@ -450,6 +495,29 @@ describe("fetchMessages", () => {
 });
 
 describe("parseMessage", () => {
+  it("uses the user ID when a fallback snapshot has no handle", async () => {
+    const adapter = await setup();
+    const message = adapter.parseMessage({
+      ...received,
+      sentBy: {
+        id: PEER,
+        projectId: PROJECT,
+        platform: "future-platform",
+        kind: "human",
+        details: {},
+        metadata: {},
+      },
+    });
+
+    expect(message.author).toMatchObject({
+      userId: PEER,
+      userName: PEER,
+      fullName: PEER,
+      isBot: false,
+      isMe: false,
+    });
+  });
+
   it("strips Markdown from text, and keeps plain text as sent", async () => {
     const adapter = await setup();
     const markdown = adapter.parseMessage({
