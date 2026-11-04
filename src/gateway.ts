@@ -1,5 +1,7 @@
 import type { Logger, StateAdapter } from "chat";
-import { io, type Socket } from "socket.io-client";
+import { io } from "socket.io-client";
+import type { Socket } from "socket.io-client";
+
 import type { PhotonApiOptions } from "./client";
 import { NAME } from "./constants";
 import type { PhotonEvent } from "./types";
@@ -54,7 +56,8 @@ export async function listenForEvents({
   let cursor = (await state.get<number>(cursorKey)) ?? 0;
   let queue = Promise.resolve();
 
-  let stop: () => void = () => undefined;
+  let stop!: () => void;
+  // oxlint-disable-next-line promise/avoid-new -- settles when any of the stop conditions below fires
   const stopped = new Promise<void>((resolve) => {
     stop = resolve;
   });
@@ -90,23 +93,24 @@ export async function listenForEvents({
         }
       );
   });
-  socket.on("delivery", (event, { seq }) => {
-    queue = queue
-      .then(async () => {
-        if (seq <= cursor) {
-          return;
-        }
-        onEvent(event);
-        await state.set(cursorKey, seq);
-        cursor = seq;
-      })
-      // An event that fails is logged and skipped, so one bad payload can't stall the stream.
-      .catch((error: unknown) => {
-        logger?.error("Photon websocket event failed", {
-          seq,
-          error: String(error),
-        });
+  const deliver = async (event: PhotonEvent, seq: number) => {
+    if (seq <= cursor) {
+      return;
+    }
+    // An event that fails is logged and skipped, so one bad payload can't stall the stream.
+    try {
+      onEvent(event);
+      await state.set(cursorKey, seq);
+      cursor = seq;
+    } catch (error) {
+      logger?.error("Photon websocket event failed", {
+        seq,
+        error: String(error),
       });
+    }
+  };
+  socket.on("delivery", (event, { seq }) => {
+    queue = queue.then(() => deliver(event, seq));
   });
   socket.on("delivery_error", (error) => {
     logger?.warn("Photon websocket delivery error", { ...error });

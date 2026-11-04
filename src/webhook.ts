@@ -1,9 +1,9 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 const TOLERANCE_SECONDS = 300;
-const SECRET_PREFIX = /^whsec_/;
-const DIGITS = /^\d+$/;
-const WHITESPACE = /\s+/;
+const SECRET_PREFIX = /^whsec_/u;
+const DIGITS = /^\d+$/u;
+const WHITESPACE = /\s+/u;
 
 /** Decodes a `whsec_<base64>` signing secret into its HMAC key bytes. */
 export function decodeWebhookSecret(secret: string): Buffer | undefined {
