@@ -1,8 +1,12 @@
 import { createHmac } from "node:crypto";
+
 import type { ChatInstance, Message } from "chat";
 import { NotImplementedError, paragraph, root, text } from "chat";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createPhotonAdapter, type PhotonMessage } from "../src/index";
+import { describe, expect, it, vi } from "vitest";
+import type { Mock } from "vitest";
+
+import { createPhotonAdapter } from "../src/index";
+import type { PhotonMessage } from "../src/index";
 
 const SECRET = `whsec_${Buffer.alloc(32, 7).toString("base64")}`;
 const PROJECT = "pho_prj_00000000000000000000000001";
@@ -11,8 +15,8 @@ const AGENT = "pho_usr_00000000000000000000000001";
 const PEER = "pho_usr_00000000000000000000000002";
 const ATTACHMENT = "pho_att_00000000000000000000000001";
 const THREAD = `photon:${SPACE}:${AGENT}:direct`;
-const UUID = /^[0-9a-f-]{36}$/;
-const MULTIPART_BOUNDARY = /^multipart\/related; boundary=(.+)$/;
+const UUID = /^[0-9a-f-]{36}$/u;
+const MULTIPART_BOUNDARY = /^multipart\/related; boundary=(?<boundary>.+)$/u;
 
 const received: PhotonMessage = {
   id: "pho_msg_00000000000000000000000001",
@@ -68,22 +72,43 @@ function signedRequest(
   });
 }
 
-const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
+const json = (body: unknown, status = 200) => Response.json(body, { status });
 
-let fetchMock: ReturnType<typeof vi.fn>;
-let processMessage: ReturnType<typeof vi.fn>;
+const sent = (content: unknown) =>
+  json(
+    {
+      ...received,
+      id: "pho_msg_00000000000000000000000002",
+      status: "dispatched",
+      sentBy: received.receivedBy,
+      content,
+    },
+    202
+  );
+
+async function* chunks() {
+  yield "Hello";
+  yield { type: "markdown_text" as const, text: ", **world**" };
+  yield {
+    type: "task_update" as const,
+    id: "1",
+    title: "search",
+    status: "complete" as const,
+  };
+}
+
+let fetchMock: Mock<typeof fetch>;
+let processMessage: Mock<ChatInstance["processMessage"]>;
 
 async function setup() {
+  fetchMock = vi.fn<typeof fetch>();
+  vi.stubGlobal("fetch", fetchMock);
   const adapter = createPhotonAdapter({
     projectId: PROJECT,
     apiKey: "pho_sk_test",
     webhookSecret: SECRET,
   });
-  processMessage = vi.fn();
+  processMessage = vi.fn<ChatInstance["processMessage"]>();
   await adapter.initialize({
     getLogger: () => ({
       debug() {},
@@ -110,12 +135,6 @@ function call(index: number) {
   };
 }
 
-beforeEach(() => {
-  fetchMock = vi.fn();
-  vi.stubGlobal("fetch", fetchMock);
-});
-afterEach(() => vi.unstubAllGlobals());
-
 describe("handleWebhook", () => {
   const event = {
     id: "pho_evt_00000000000000000000000001",
@@ -140,29 +159,33 @@ describe("handleWebhook", () => {
     const response = await adapter.handleWebhook(signedRequest(event));
 
     expect(response.status).toBe(200);
-    expect(processMessage).toHaveBeenCalledOnce();
-    const [, threadId, factory] = processMessage.mock.calls[0] as [
-      unknown,
-      string,
-      () => Promise<Message>,
-    ];
-    expect(threadId).toBe(THREAD);
-    expect(adapter.isDM(threadId)).toBe(true);
-
-    const message = await factory();
-    expect(message.text).toBe("What's in this photo?");
-    expect(message.author).toMatchObject({
-      userId: PEER,
-      userName: "+12025550102",
-      isMe: false,
-      isBot: false,
-    });
-    expect(message.metadata.dateSent.toISOString()).toBe(
-      "2026-11-04T10:00:00.000Z"
+    expect(processMessage).toHaveBeenCalledExactlyOnceWith(
+      adapter,
+      THREAD,
+      expect.any(Function),
+      undefined
     );
-    expect(message.attachments).toMatchObject([
-      { type: "image", mimeType: "image/jpeg", name: "IMG_1.jpeg", size: 2048 },
-    ]);
+    expect(adapter.isDM(THREAD)).toBeTruthy();
+
+    const factory = processMessage.mock.calls[0]?.[2] as () => Promise<Message>;
+    await expect(factory()).resolves.toMatchObject({
+      text: "What's in this photo?",
+      author: {
+        userId: PEER,
+        userName: "+12025550102",
+        isMe: false,
+        isBot: false,
+      },
+      metadata: { dateSent: new Date("2026-11-04T10:00:00.000Z") },
+      attachments: [
+        {
+          type: "image",
+          mimeType: "image/jpeg",
+          name: "IMG_1.jpeg",
+          size: 2048,
+        },
+      ],
+    });
     expect(call(0).url.pathname).toBe(
       `/v1/projects/${PROJECT}/attachments/${ATTACHMENT}`
     );
@@ -176,23 +199,21 @@ describe("handleWebhook", () => {
 
     await adapter.handleWebhook(signedRequest(event));
 
-    const [, , factory] = processMessage.mock.calls[0] as [
-      unknown,
-      string,
-      () => Promise<Message>,
-    ];
-    const message = await factory();
-    expect(message.text).toBe("What's in this photo?");
-    expect(message.attachments).toMatchObject([
-      { type: "file", fetchMetadata: { attachmentId: ATTACHMENT } },
-    ]);
+    const factory = processMessage.mock.calls[0]?.[2] as () => Promise<Message>;
+    await expect(factory()).resolves.toMatchObject({
+      text: "What's in this photo?",
+      attachments: [
+        { type: "file", fetchMetadata: { attachmentId: ATTACHMENT } },
+      ],
+    });
   });
 
   it("rejects a bad signature", async () => {
     const adapter = await setup();
     const request = signedRequest(event);
     request.headers.set("webhook-signature", "v1,AAAA");
-    expect((await adapter.handleWebhook(request)).status).toBe(401);
+    const response = await adapter.handleWebhook(request);
+    expect(response.status).toBe(401);
     expect(processMessage).not.toHaveBeenCalled();
   });
 
@@ -206,27 +227,15 @@ describe("handleWebhook", () => {
 
   it("acknowledges other events without routing them", async () => {
     const adapter = await setup();
-    const typing = { ...event, type: "space.typing.updated" };
-    expect((await adapter.handleWebhook(signedRequest(typing))).status).toBe(
-      200
+    const response = await adapter.handleWebhook(
+      signedRequest({ ...event, type: "space.typing.updated" })
     );
+    expect(response.status).toBe(200);
     expect(processMessage).not.toHaveBeenCalled();
   });
 });
 
 describe("sending", () => {
-  const sent = (content: unknown) =>
-    json(
-      {
-        ...received,
-        id: "pho_msg_00000000000000000000000002",
-        status: "dispatched",
-        sentBy: received.receivedBy,
-        content,
-      },
-      202
-    );
-
   it("posts Markdown as the thread's Agent, without raw HTML", async () => {
     const adapter = await setup();
     fetchMock.mockResolvedValueOnce(sent({}));
@@ -236,13 +245,12 @@ describe("sending", () => {
     });
 
     const request = call(0);
-    expect(request.method).toBe("POST");
-    expect(request.url.toString()).toBe(
-      `https://api.photon.codes/v1/projects/${PROJECT}/messages`
+    expect(`${request.method} ${request.url}`).toBe(
+      `POST https://api.photon.codes/v1/projects/${PROJECT}/messages`
     );
     expect(request.headers.get("authorization")).toBe("Bearer pho_sk_test");
     expect(request.headers.get("idempotency-key")).toMatch(UUID);
-    expect(JSON.parse(request.body as string)).toEqual({
+    expect(JSON.parse(request.body as string)).toStrictEqual({
       spaceId: SPACE,
       senderId: AGENT,
       content: { type: "text", format: "markdown", text: "**Hi**there" },
@@ -257,7 +265,7 @@ describe("sending", () => {
     const adapter = await setup();
     fetchMock.mockResolvedValueOnce(sent({}));
     await adapter.postMessage(THREAD, "2 * 3 = 6");
-    expect(JSON.parse(call(0).body as string).content).toEqual({
+    expect(JSON.parse(call(0).body as string).content).toStrictEqual({
       type: "text",
       format: "plain",
       text: "2 * 3 = 6",
@@ -281,11 +289,11 @@ describe("sending", () => {
     expect(upload.url.pathname).toBe(`/v1/projects/${PROJECT}/attachments`);
     const boundary = upload.headers
       .get("content-type")
-      ?.match(MULTIPART_BOUNDARY)?.[1];
+      ?.match(MULTIPART_BOUNDARY)?.groups?.boundary;
     expect(boundary).toBeTruthy();
     expect(upload.headers.get("idempotency-key")).toBeTruthy();
     const body = Buffer.from(await (upload.body as Blob).arrayBuffer());
-    expect(body).toEqual(
+    expect(body).toStrictEqual(
       Buffer.concat([
         Buffer.from(
           `--${boundary}\r\nContent-Type: application/json\r\n\r\n{"contentType":"image/png","sizeBytes":3,"filename":"dot.png"}\r\n--${boundary}\r\nContent-Type: image/png\r\n\r\n`
@@ -294,7 +302,7 @@ describe("sending", () => {
         Buffer.from(`\r\n--${boundary}--\r\n`),
       ])
     );
-    expect(JSON.parse(call(1).body as string).content).toEqual({
+    expect(JSON.parse(call(1).body as string).content).toStrictEqual({
       type: "attachment",
       attachmentId: ATTACHMENT,
     });
@@ -302,7 +310,10 @@ describe("sending", () => {
 
   it("edits, deletes, and reacts by sending against the parent Message", async () => {
     const adapter = await setup();
-    fetchMock.mockImplementation(async () => sent({}));
+    fetchMock
+      .mockResolvedValueOnce(sent({}))
+      .mockResolvedValueOnce(sent({}))
+      .mockResolvedValueOnce(sent({}));
     const parent = "pho_msg_00000000000000000000000002";
 
     await adapter.editMessage(THREAD, parent, "fixed");
@@ -310,12 +321,12 @@ describe("sending", () => {
     await adapter.addReaction(THREAD, parent, "thumbs_up");
 
     const bodies = [0, 1, 2].map((i) => JSON.parse(call(i).body as string));
-    expect(bodies.map((body) => body.parentMessageId)).toEqual([
+    expect(bodies.map((body) => body.parentMessageId)).toStrictEqual([
       parent,
       parent,
       parent,
     ]);
-    expect(bodies.map((body) => body.content)).toEqual([
+    expect(bodies.map((body) => body.content)).toStrictEqual([
       {
         type: "message.update",
         content: { type: "text", format: "plain", text: "fixed" },
@@ -328,16 +339,6 @@ describe("sending", () => {
   it("collects a stream into one message", async () => {
     const adapter = await setup();
     fetchMock.mockResolvedValueOnce(sent({}));
-    async function* chunks() {
-      yield "Hello";
-      yield { type: "markdown_text" as const, text: ", **world**" };
-      yield {
-        type: "task_update" as const,
-        id: "1",
-        title: "search",
-        status: "complete" as const,
-      };
-    }
 
     await adapter.stream(THREAD, chunks());
 
@@ -372,7 +373,7 @@ describe("sending", () => {
     expect(call(0).url.pathname).toBe(
       `/v1/projects/${PROJECT}/spaces/${SPACE}/typing`
     );
-    expect(JSON.parse(call(0).body as string)).toEqual({
+    expect(JSON.parse(call(0).body as string)).toStrictEqual({
       senderId: AGENT,
       typing: true,
     });
@@ -432,7 +433,7 @@ describe("fetchMessages", () => {
     const page = await adapter.fetchMessages(THREAD, { limit: 2 });
 
     const query = call(0).url.searchParams;
-    expect(Object.fromEntries(query)).toEqual({
+    expect(Object.fromEntries(query)).toStrictEqual({
       spaceId: SPACE,
       perspectiveUserId: AGENT,
       pageSize: "2",
@@ -442,7 +443,7 @@ describe("fetchMessages", () => {
     expect(page.nextCursor).toBe("abc.def");
     expect(
       page.messages.map((message) => [message.id, message.author.isMe])
-    ).toEqual([
+    ).toStrictEqual([
       [received.id, false],
       [reply.id, true],
     ]);
@@ -463,7 +464,9 @@ describe("parseMessage", () => {
 
     expect(markdown.text).toBe("Hello world");
     expect(plain.text).toBe("2*3*4 = 24");
-    expect(plain.formatted).toEqual(root([paragraph([text("2*3*4 = 24")])]));
+    expect(plain.formatted).toStrictEqual(
+      root([paragraph([text("2*3*4 = 24")])])
+    );
   });
 });
 
@@ -472,10 +475,13 @@ describe("thread IDs", () => {
     const adapter = await setup();
     expect(adapter.encodeThreadId(adapter.decodeThreadId(THREAD))).toBe(THREAD);
     expect(adapter.channelIdFromThreadId(THREAD)).toBe(`photon:${SPACE}`);
-    expect(() => adapter.decodeThreadId("slack:C1:123")).toThrow();
+    expect(() => adapter.decodeThreadId("slack:C1:123")).toThrow(
+      "Invalid Photon thread ID: slack:C1:123"
+    );
   });
 
   it("answers mentions of the Chat instance's name", async () => {
-    expect((await setup()).userName).toBe("mybot");
+    const adapter = await setup();
+    expect(adapter.userName).toBe("mybot");
   });
 });

@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
+
 import { AdapterError } from "@chat-adapter/shared";
 import type { FileUpload } from "chat";
 import { NotImplementedError } from "chat";
 import { lookup } from "mime-types";
+
 import { NAME } from "./constants";
 import type { PhotonAttachment } from "./types";
 

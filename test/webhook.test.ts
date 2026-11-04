@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+
 import { decodeWebhookSecret, verifyWebhookSignature } from "../src/webhook";
 
 // Synthetic interoperability vector from @photon-hq/contracts
@@ -21,7 +22,7 @@ const headers = (overrides: Record<string, string> = {}) =>
     ...overrides,
   });
 
-describe("verifyWebhookSignature", () => {
+describe(verifyWebhookSignature, () => {
   it("accepts the contracts test vector", () => {
     expect(
       verifyWebhookSignature(encode(vector.body), headers(), key, vector.now)

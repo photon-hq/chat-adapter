@@ -7,8 +7,10 @@ import {
   text as textNode,
   toPlainText,
 } from "chat";
+
 import type { PhotonClient } from "./client";
-import { attachmentType, type ContentParts } from "./content";
+import type { ContentParts } from "./content";
+import { attachmentType } from "./content";
 import type { PhotonAttachment, PhotonMessage } from "./types";
 
 /** Builds a Chat SDK Message, looking up each attachment's name, type, and size. */

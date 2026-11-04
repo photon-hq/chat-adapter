@@ -9,6 +9,7 @@ import type {
   FetchResult,
   FormattedContent,
   Logger,
+  Message,
   RawMessage,
   StreamChunk,
   ThreadInfo,
@@ -16,10 +17,10 @@ import type {
 } from "chat";
 import {
   defaultEmojiResolver,
-  type Message,
   NotImplementedError,
   stringifyMarkdown,
 } from "chat";
+
 import { PhotonClient } from "./client";
 import { NAME } from "./constants";
 import { readContent, toTextContent } from "./content";
@@ -37,7 +38,7 @@ import { decodeWebhookSecret, verifyWebhookSignature } from "./webhook";
 
 const DEFAULT_BASE_URL = "https://api.photon.codes";
 const HISTORY_EXCLUDED_CONTENT = "message.read,space.typing.update";
-const TRAILING_SLASHES = /\/+$/;
+const TRAILING_SLASHES = /\/+$/u;
 
 export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
   readonly name = NAME;
@@ -171,18 +172,24 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
     if (!this.chat) {
       return new Response("Chat instance not initialized", { status: 500 });
     }
-    const listener = listenForEvents({
+    const gateway = {
       ...this.client.options,
       abortSignal,
       durationMs,
       logger: this.logger,
-      onEvent: (event) => this.routeEvent(event, options),
+      onEvent: (event: PhotonEvent) => this.routeEvent(event, options),
       state: this.chat.getState(),
-    }).catch((error: unknown) => {
-      this.logger?.error("Photon websocket listener failed", {
-        error: String(error),
-      });
-    });
+    };
+    const listen = async () => {
+      try {
+        await listenForEvents(gateway);
+      } catch (error) {
+        this.logger?.error("Photon websocket listener failed", {
+          error: String(error),
+        });
+      }
+    };
+    const listener = listen();
     options.waitUntil?.(listener);
     return Response.json({ status: "listening", durationMs });
   }
@@ -201,6 +208,8 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
     if (text) {
       sent.push(await this.send(threadId, text, "postMessage"));
     }
+    // Each file goes out as its own Message, in the order given.
+    /* oxlint-disable no-await-in-loop */
     for (const file of files) {
       const attachmentId = await this.client.upload(file);
       sent.push(
@@ -211,6 +220,7 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
         )
       );
     }
+    /* oxlint-enable no-await-in-loop */
     return sent[0] as RawMessage<PhotonMessage>;
   }
 
@@ -316,11 +326,17 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
     if (options.cursor) {
       query.set("pageToken", options.cursor);
     }
-    const page = (await (
-      await this.client.request("GET", `/messages?${query}`, "fetchMessages")
-    ).json()) as { items: PhotonMessage[]; nextPageToken?: string };
+    const response = await this.client.request(
+      "GET",
+      `/messages?${query}`,
+      "fetchMessages"
+    );
+    const page = (await response.json()) as {
+      items: PhotonMessage[];
+      nextPageToken?: string;
+    };
 
-    const items = forward ? page.items : [...page.items].reverse();
+    const items = forward ? page.items : page.items.toReversed();
     const messages = await Promise.all(
       items
         .map((raw) => ({ raw, parts: readContent(raw.content) }))
@@ -334,9 +350,12 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
 
   async fetchThread(threadId: string): Promise<ThreadInfo> {
     const { spaceId } = this.decodeThreadId(threadId);
-    const space = (await (
-      await this.client.request("GET", `/spaces/${spaceId}`, "fetchThread")
-    ).json()) as PhotonSpace;
+    const response = await this.client.request(
+      "GET",
+      `/spaces/${spaceId}`,
+      "fetchThread"
+    );
+    const space = (await response.json()) as PhotonSpace;
     return {
       id: threadId,
       channelId: this.channelIdFromThreadId(threadId),

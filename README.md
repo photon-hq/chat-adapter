@@ -15,9 +15,9 @@ The examples keep Chat SDK's state in Redis: `createRedisState()` reads `REDIS_U
 ## Usage
 
 ```ts
-import { Chat } from "chat";
-import { createPhotonAdapter } from "@photon-ai/chat-adapter";
 import { createRedisState } from "@chat-adapter/state-redis";
+import { createPhotonAdapter } from "@photon-ai/chat-adapter";
+import { Chat } from "chat";
 
 export const bot = new Chat({
   userName: "mybot",
@@ -44,10 +44,13 @@ Route Photon's webhook to the adapter, for example in a Next.js route handler:
 ```ts
 // app/api/webhooks/photon/route.ts
 import { after } from "next/server";
+
 import { bot } from "@/lib/bot";
 
 export async function POST(request: Request) {
-  return bot.webhooks.photon(request, { waitUntil: (task) => after(() => task) });
+  return bot.webhooks.photon(request, {
+    waitUntil: (task) => after(() => task),
+  });
 }
 ```
 
@@ -71,12 +74,15 @@ On serverless, start it from a cron job that runs more often than the listener l
 ```ts
 // app/api/photon/gateway/route.ts
 import { after } from "next/server";
+
 import { bot } from "@/lib/bot";
 
 export const maxDuration = 800;
 
 export async function GET(request: Request) {
-  if (request.headers.get("authorization") !== `Bearer ${process.env.CRON_SECRET}`) {
+  if (
+    request.headers.get("authorization") !== `Bearer ${process.env.CRON_SECRET}`
+  ) {
     return new Response("Unauthorized", { status: 401 });
   }
   await bot.initialize();
@@ -113,7 +119,7 @@ pnpm install && pnpm build
 PHOTON_PROJECT_ID=pho_prj_... PHOTON_API_KEY=pho_sk_... node examples/echo.ts
 ```
 
-Node 22.18 or newer runs the TypeScript file as is.
+Building and checking the repo (`pnpm build`, `pnpm check`) needs Node 22.22.2 or newer, or 24.15 or newer, and that Node runs the TypeScript file as is. The published package itself runs on Node 20 or newer.
 
 ## Threads
 
