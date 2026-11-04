@@ -1,8 +1,7 @@
 name: Publish staging
 
+# Run by hand to start a release; Promote to production then publishes it.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -32,4 +31,4 @@ jobs:
       package: "@photon-ai/chat-adapter"
       ci-workflow: ci.yml
       pack: node scripts/pack-release.mjs
-      dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+      dry-run: ${{ inputs.dry_run }}
