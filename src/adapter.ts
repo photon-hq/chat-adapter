@@ -31,10 +31,14 @@ import {
   stringifyMarkdown,
 } from "chat";
 import { lookup } from "mime-types";
+import { io, type Socket } from "socket.io-client";
 import { decodeWebhookSecret, verifyWebhookSignature } from "./webhook";
 
 const NAME = "photon";
 const DEFAULT_BASE_URL = "https://api.photon.codes";
+// The event contract this adapter parses; the websocket pins it per subscription.
+const API_VERSION = "2026-07-01";
+const SUBSCRIBE_TIMEOUT_MS = 10_000;
 const HISTORY_EXCLUDED_CONTENT = "message.read,space.typing.update";
 const TRAILING_SLASHES = /\/+$/;
 
@@ -94,6 +98,31 @@ export interface PhotonMessage {
   status: string;
   timestamps: Record<string, string | undefined>;
   [key: string]: unknown;
+}
+
+/** A Photon event envelope, as webhooks and the websocket deliver it. */
+export interface PhotonEvent {
+  data?: { object?: PhotonMessage };
+  id?: string;
+  type?: string;
+}
+
+interface DeliveryError {
+  code: string;
+  fatal: boolean;
+  message: string;
+}
+
+interface ServerEvents {
+  delivery: (event: PhotonEvent, metadata: { seq: number }) => void;
+  delivery_error: (error: DeliveryError) => void;
+}
+
+interface ClientEvents {
+  subscribe: (
+    input: { apiVersion: string; startSeq: number },
+    ack: (result: { ok: true } | { error: DeliveryError; ok: false }) => void
+  ) => void;
 }
 
 interface PhotonAttachment {
@@ -209,11 +238,7 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
       return new Response("Invalid webhook signature", { status: 401 });
     }
 
-    let event: {
-      data?: { object?: PhotonMessage };
-      id?: string;
-      type?: string;
-    };
+    let event: PhotonEvent;
     try {
       event = JSON.parse(new TextDecoder().decode(body));
     } catch {
@@ -225,29 +250,105 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
       });
     }
 
-    const raw = event.data?.object;
-    if (event.type !== "message.received" || !raw) {
-      return new Response(null, { status: 200 });
-    }
-    const threadId = this.threadIdOf(raw);
-    const parts = readContent(raw.content);
-    if (!threadId) {
-      this.logger?.warn("Photon message has no receiving Agent; skipped", {
-        messageId: raw.id,
-      });
-      return new Response(null, { status: 200 });
-    }
-    if (!(parts.text || parts.attachmentIds.length)) {
-      return new Response(null, { status: 200 });
-    }
-
-    this.chat.processMessage(
-      this,
-      threadId,
-      () => this.toMessage(raw, threadId, parts),
-      options
-    );
+    this.routeEvent(event, options);
     return new Response(null, { status: 200 });
+  }
+
+  /**
+   * Receives events over Photon's websocket instead of a webhook. Listens for
+   * `durationMs` (`Infinity` listens until `abortSignal`), reconnecting as
+   * needed, and keeps the last event it handled in the Chat SDK state so the
+   * next connection resumes after it.
+   */
+  async startGatewayListener(
+    options: WebhookOptions = {},
+    durationMs = 180_000,
+    abortSignal?: AbortSignal
+  ): Promise<Response> {
+    if (!this.chat) {
+      return new Response("Chat instance not initialized", { status: 500 });
+    }
+    const state = this.chat.getState();
+    const cursorKey = `${NAME}:cursor:${this.projectId}`;
+    let cursor = (await state.get<number>(cursorKey)) ?? 0;
+    let queue = Promise.resolve();
+
+    const socket: Socket<ServerEvents, ClientEvents> = io(this.baseUrl, {
+      path: `/v1/projects/${this.projectId}/events/ws`,
+      addTrailingSlash: false,
+      transports: ["websocket"],
+      extraHeaders: { authorization: `Bearer ${this.apiKey}` },
+    });
+    socket.on("connect", () => {
+      socket
+        .timeout(SUBSCRIBE_TIMEOUT_MS)
+        .emit(
+          "subscribe",
+          { startSeq: cursor, apiVersion: API_VERSION },
+          (timedOut, result) => {
+            if (timedOut) {
+              // Closing the transport makes Socket.IO reconnect and subscribe again.
+              socket.io.engine.close();
+            } else if (!result.ok) {
+              this.logger?.error("Photon websocket subscription rejected", {
+                ...result.error,
+              });
+            }
+          }
+        );
+    });
+    socket.on("delivery", (event, { seq }) => {
+      queue = queue
+        .then(async () => {
+          if (seq <= cursor) {
+            return;
+          }
+          this.routeEvent(event, options);
+          await state.set(cursorKey, seq);
+          cursor = seq;
+        })
+        .catch((error: unknown) => {
+          this.logger?.error("Photon websocket cursor not saved", {
+            seq,
+            error: String(error),
+          });
+        });
+    });
+    socket.on("delivery_error", (error) => {
+      this.logger?.warn("Photon websocket delivery error", { ...error });
+    });
+    socket.on("connect_error", (error) => {
+      this.logger?.warn("Photon websocket connection failed", {
+        error: error.message,
+      });
+    });
+
+    let finish: (drained: Promise<void>) => void = () => undefined;
+    const listener = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const stop = () => {
+      clearTimeout(timer);
+      socket.disconnect();
+      finish(queue);
+    };
+    const timer = Number.isFinite(durationMs)
+      ? setTimeout(stop, durationMs)
+      : undefined;
+    socket.on("disconnect", (reason) => {
+      // Photon disconnects for good only on a protocol violation; anything else reconnects.
+      if (reason === "io server disconnect") {
+        this.logger?.error("Photon closed the websocket; listener stopped");
+        stop();
+      }
+    });
+    if (abortSignal?.aborted) {
+      stop();
+    }
+    abortSignal?.addEventListener("abort", stop, { once: true });
+    options.waitUntil?.(listener);
+
+    return Response.json({ status: "listening", durationMs });
   }
 
   async postMessage(
@@ -424,6 +525,31 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
     return id
       ? { ...attachment, fetchData: () => this.download(id) }
       : attachment;
+  }
+
+  /** Routes `message.received` into the Chat SDK; every other event is ignored. */
+  private routeEvent(event: PhotonEvent, options?: WebhookOptions): void {
+    const raw = event.data?.object;
+    if (event.type !== "message.received" || !raw) {
+      return;
+    }
+    const threadId = this.threadIdOf(raw);
+    if (!threadId) {
+      this.logger?.warn("Photon message has no receiving Agent; skipped", {
+        messageId: raw.id,
+      });
+      return;
+    }
+    const parts = readContent(raw.content);
+    if (!(parts.text || parts.attachmentIds.length)) {
+      return;
+    }
+    this.chat?.processMessage(
+      this,
+      threadId,
+      () => this.toMessage(raw, threadId, parts),
+      options
+    );
   }
 
   private threadIdOf(raw: PhotonMessage): string | undefined {

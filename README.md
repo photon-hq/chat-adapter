@@ -2,7 +2,7 @@
 
 [Chat SDK](https://chat-sdk.dev/docs) adapter for [Photon](https://photon.codes). One adapter reaches every platform a Photon project has connected: iMessage, SMS, WhatsApp, WhatsApp Business, Telegram, and email.
 
-It talks to the [Photon API](https://api.photon.codes) with a project API key and receives messages through a signed Photon webhook.
+It talks to the [Photon API](https://api.photon.codes) with a project API key and receives messages through a signed Photon webhook or over Photon's websocket.
 
 ## Installation
 
@@ -45,17 +45,51 @@ export async function POST(request: Request) {
 }
 ```
 
+### Or over the websocket
+
+Without a public URL, receive messages over Photon's websocket instead. `startGatewayListener` connects, reconnects when the connection drops, and saves the last event it handled in your state adapter, so the next connection resumes after it. Use a persistent state adapter, such as Redis, for that to survive a restart.
+
+On a long-running server, listen until shutdown:
+
+```ts
+await bot.initialize();
+const controller = new AbortController();
+process.on("SIGTERM", () => controller.abort());
+await bot
+  .getAdapter("photon")
+  .startGatewayListener({}, Number.POSITIVE_INFINITY, controller.signal);
+```
+
+On serverless, start it from a cron job that runs more often than the listener lasts (the default is 3 minutes):
+
+```ts
+// app/api/photon/gateway/route.ts
+import { after } from "next/server";
+import { bot } from "@/lib/bot";
+
+export const maxDuration = 800;
+
+export async function GET() {
+  await bot.initialize();
+  return bot
+    .getAdapter("photon")
+    .startGatewayListener({ waitUntil: (task) => after(() => task) }, 600_000);
+}
+```
+
+Overlapping listeners are fine: Chat SDK drops a message it has already handled.
+
 ## Setup
 
 1. In the [Photon dashboard](https://app.photon.codes), create a project API key (`pho_sk_...`).
-2. Add a webhook destination pointing at your route, with the `message.received` event, and copy its signing secret (`whsec_...`).
+2. To receive by webhook, add a webhook destination pointing at your route, with the `message.received` event, and copy its signing secret (`whsec_...`). The websocket needs only the API key.
 3. Set the environment variables:
 
 | Variable | Option | Description |
 | --- | --- | --- |
 | `PHOTON_PROJECT_ID` | `projectId` | The project's ID. Required. |
 | `PHOTON_API_KEY` | `apiKey` | The project API key. Required. |
-| `PHOTON_WEBHOOK_SECRET` | `webhookSecret` | The webhook destination's signing secret. Required to receive messages. |
+| `PHOTON_WEBHOOK_SECRET` | `webhookSecret` | The webhook destination's signing secret. Required to receive messages by webhook. |
 | `PHOTON_API_URL` | `baseUrl` | API origin. Defaults to `https://api.photon.codes`. |
 
 Options passed to `createPhotonAdapter` take precedence over the environment.
@@ -68,7 +102,7 @@ A thread is one Photon Space, as seen by one of your project's Agents (the line 
 
 | Chat SDK | Photon |
 | --- | --- |
-| Receive messages | `message.received` webhooks, Standard Webhooks signatures |
+| Receive messages | `message.received`, by webhook (Standard Webhooks signatures) or websocket |
 | `post` | Text (Markdown or plain) and files, uploaded as attachments |
 | Streaming | Collected and sent once, complete |
 | `edit` / `delete` | `message.update` / `message.delete`, where the platform supports them |
