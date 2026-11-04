@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import { createMemoryState } from "@chat-adapter/state-memory";
 import { Server } from "socket.io";
 import { afterEach, expect, it } from "vitest";
-import { listenForEvents } from "./gateway";
+import { listenForEvents } from "../src/gateway";
 
 const PROJECT = "pho_prj_00000000000000000000000001";
 let io: Server | undefined;

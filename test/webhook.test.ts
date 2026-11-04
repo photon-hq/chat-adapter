@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeWebhookSecret, verifyWebhookSignature } from "./webhook";
+import { decodeWebhookSecret, verifyWebhookSignature } from "../src/webhook";
 
 // Synthetic interoperability vector from @photon-hq/contracts
 // (schemas/test-vectors/standard-webhooks.json); not a credential.

@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import type { ChatInstance, Message } from "chat";
 import { NotImplementedError, paragraph, root, text } from "chat";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createPhotonAdapter, type PhotonMessage } from "./index";
+import { createPhotonAdapter, type PhotonMessage } from "../src/index";
 
 const SECRET = `whsec_${Buffer.alloc(32, 7).toString("base64")}`;
 const PROJECT = "pho_prj_00000000000000000000000001";

@@ -5,7 +5,7 @@ import { createMemoryState } from "@chat-adapter/state-memory";
 import { Chat } from "chat";
 import { Server } from "socket.io";
 import { afterEach, expect, it, vi } from "vitest";
-import { createPhotonAdapter } from "./index";
+import { createPhotonAdapter } from "../src/index";
 
 const PROJECT = "pho_prj_00000000000000000000000001";
 const SPACE = "pho_spc_00000000000000000000000001";
