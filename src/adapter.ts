@@ -45,6 +45,8 @@ import { decodeWebhookSecret, verifyWebhookSignature } from "./webhook";
 const DEFAULT_BASE_URL = "https://api.photon.codes";
 const HISTORY_EXCLUDED_CONTENT = "message.read,space.typing.update";
 const TRAILING_SLASHES = /\/+$/u;
+// shortcut: a reaction older than this can't be removed; raise it if bots remove reactions later than that.
+const REACTION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
   readonly name = NAME;
@@ -275,63 +277,58 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
     );
   }
 
+  // Photon removes a reaction by deleting the reaction's own Message, and its
+  // API can't look reactions up by target, so this remembers each one's ID.
   async addReaction(
     threadId: string,
     messageId: string,
     emoji: EmojiValue | string
   ): Promise<void> {
-    await this.send(
+    const reaction = defaultEmojiResolver.toGChat(emoji);
+    const sent = await this.send(
       threadId,
-      { type: "reaction", reaction: defaultEmojiResolver.toGChat(emoji) },
+      { type: "reaction", reaction },
       "addReaction",
       messageId
     );
+    await this.chat
+      ?.getState()
+      .set(
+        this.reactionKey(threadId, messageId, reaction),
+        sent.id,
+        REACTION_TTL_MS
+      );
   }
 
-  // Photon removes a reaction by deleting the reaction's own Message, so this
-  // finds the Agent's reaction Message that no later delete has removed.
   async removeReaction(
     threadId: string,
     messageId: string,
     emoji: EmojiValue | string
   ): Promise<void> {
-    const { spaceId, agentUserId } = this.decodeThreadId(threadId);
-    const reaction = defaultEmojiResolver.toGChat(emoji);
-    // shortcut: searches the Agent's newest 100 sent Messages in the Space; page further back if older reactions must be removable.
-    const query = new URLSearchParams({
-      spaceId,
-      perspectiveUserId: agentUserId,
-      direction: "sent",
-      order: "desc",
-      pageSize: "100",
-    });
-    const response = await this.client.request(
-      "GET",
-      `/messages?${query}`,
-      "removeReaction"
+    const state = this.chat?.getState();
+    const key = this.reactionKey(
+      threadId,
+      messageId,
+      defaultEmojiResolver.toGChat(emoji)
     );
-    const { items } = (await response.json()) as { items: PhotonMessage[] };
-    const deleted = new Set(
-      items
-        .filter(({ content }) => content.type === "message.delete")
-        .map(({ parentMessageId }) => parentMessageId)
-    );
-    const own = items.find(
-      (item) =>
-        item.content.type === "reaction" &&
-        item.content.reaction === reaction &&
-        item.parentMessageId === messageId &&
-        item.sentBy.id === agentUserId &&
-        !deleted.has(item.id)
-    );
-    if (own) {
-      await this.send(
-        threadId,
-        { type: "message.delete" },
-        "removeReaction",
-        own.id
+    const reactionId = await state?.get<string>(key);
+    if (!reactionId) {
+      this.logger?.warn(
+        "No reaction to remove: this adapter didn't add it, or added it over 30 days ago",
+        {
+          messageId,
+          emoji: String(emoji),
+        }
       );
+      return;
     }
+    await this.send(
+      threadId,
+      { type: "message.delete" },
+      "removeReaction",
+      reactionId
+    );
+    await state?.delete(key);
   }
 
   /** Opens the direct Space between `agentUserId` and a Photon User, creating it when needed. */
@@ -592,6 +589,10 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
       },
       options
     );
+  }
+
+  private reactionKey(threadId: string, messageId: string, reaction: string) {
+    return `${NAME}:reaction:${this.decodeThreadId(threadId).agentUserId}:${messageId}:${reaction}`;
   }
 
   private threadIdOf(raw: PhotonMessage): string | undefined {

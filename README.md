@@ -135,7 +135,7 @@ A thread is one Photon Space, as seen by one of your project's Agents (the line 
 | Streaming | Collected and sent once, complete |
 | `edit` / `delete` | `message.update` / `message.delete`, where the platform supports them |
 | `addReaction` | `reaction`, where the platform supports it |
-| `removeReaction` | `message.delete` of the Agent's reaction Message, found among its newest 100 sent Messages in the Space |
+| `removeReaction` | `message.delete` of the reaction Message `addReaction` sent, whose ID is kept in the Chat state for 30 days |
 | `openDM` | The direct Space between `agentUserId` and the user, created if needed |
 | `onReaction` | Inbound `reaction` Messages, and removals (a `message.delete` of a reaction Message) |
 | `onMessageUpdated` / `onMessageDeleted` | Inbound `message.update` / `message.delete`, carrying the original Message's ID |
