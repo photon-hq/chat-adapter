@@ -1,0 +1,24 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: read
+  id-token: write
+  # Required by buildspace typescript-service-release's github-packages-publish
+  # job (permission is validated at workflow start even when the job is skipped).
+  packages: write
+
+jobs:
+  release:
+    uses: photon-hq/buildspace/.github/workflows/typescript-service-release.yaml@main
+    with:
+      service-name: chat-adapter
+      working-directory: .
+      build-command: "bun run build"
+      use-oidc: true
+      dry-run: false
+    secrets: inherit
