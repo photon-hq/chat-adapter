@@ -41,7 +41,7 @@ const TRAILING_SLASHES = /\/+$/;
 
 export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
   readonly name = NAME;
-  readonly userName: string;
+  userName: string;
 
   private chat: ChatInstance | null = null;
   private readonly client: PhotonClient;
@@ -75,12 +75,13 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
         DEFAULT_BASE_URL
       ).replace(TRAILING_SLASHES, ""),
     });
-    this.userName = config.userName ?? NAME;
+    this.userName = config.userName ?? "";
     this.logger = config.logger;
   }
 
   async initialize(chat: ChatInstance): Promise<void> {
     this.chat = chat;
+    this.userName ||= chat.getUserName();
     this.logger ??= chat.getLogger(NAME);
   }
 
@@ -349,12 +350,12 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
     if (!threadId) {
       throw new ValidationError(NAME, `Message ${raw.id} has no Agent User`);
     }
-    const { text, attachmentIds } = readContent(raw.content);
+    const parts = readContent(raw.content);
     return buildChatMessage(
       raw,
       threadId,
-      text,
-      attachmentIds.map((id) => toAttachment(this.client, id))
+      parts,
+      parts.attachmentIds.map((id) => toAttachment(this.client, id))
     );
   }
 

@@ -5,6 +5,8 @@ import type { PhotonContent } from "./types";
 
 export interface ContentParts {
   attachmentIds: string[];
+  /** Whether `text` is Markdown rather than plain text. */
+  markdown: boolean;
   text: string;
 }
 
@@ -12,13 +14,19 @@ export interface ContentParts {
 export function readContent(content: PhotonContent): ContentParts {
   switch (content.type) {
     case "text":
-      return { text: content.text as string, attachmentIds: [] };
+      return {
+        text: content.text as string,
+        markdown: content.format === "markdown",
+        attachmentIds: [],
+      };
     case "attachment":
     case "voice": {
-      const caption = (content.metadata as { caption?: { text?: string } })
-        ?.caption?.text;
+      const caption = (
+        content.metadata as { caption?: { format?: string; text?: string } }
+      )?.caption;
       return {
-        text: caption ?? "",
+        text: caption?.text ?? "",
+        markdown: caption?.format === "markdown",
         attachmentIds: [content.attachmentId as string],
       };
     }
@@ -29,11 +37,12 @@ export function readContent(content: PhotonContent): ContentParts {
           .map((part) => part.text)
           .filter(Boolean)
           .join("\n"),
+        markdown: parts.some((part) => part.markdown),
         attachmentIds: parts.flatMap((part) => part.attachmentIds),
       };
     }
     default:
-      return { text: "", attachmentIds: [] };
+      return { text: "", markdown: false, attachmentIds: [] };
   }
 }
 

@@ -7,8 +7,10 @@ It talks to the [Photon API](https://api.photon.codes) with a project API key an
 ## Installation
 
 ```bash
-pnpm add chat @photon-ai/chat-adapter
+pnpm add chat @photon-ai/chat-adapter @chat-adapter/state-redis
 ```
+
+The examples keep Chat SDK's state in Redis: `createRedisState()` reads `REDIS_URL`. Any Chat SDK state adapter works.
 
 ## Usage
 
@@ -30,6 +32,10 @@ bot.onDirectMessage(async (thread, message) => {
 bot.onNewMention(async (thread) => {
   await thread.subscribe();
   await thread.post({ markdown: "Hi, I'm **here**." });
+});
+
+bot.onSubscribedMessage(async (thread, message) => {
+  await thread.post(`You said: ${message.text}`);
 });
 ```
 
@@ -60,7 +66,7 @@ await bot
   .startGatewayListener({}, Number.POSITIVE_INFINITY, controller.signal);
 ```
 
-On serverless, start it from a cron job that runs more often than the listener lasts (the default is 3 minutes):
+On serverless, start it from a cron job that runs more often than the listener lasts (the default is 3 minutes). Check the cron secret first, so nobody else can start listeners on your API key; Vercel Cron sends `CRON_SECRET` as a bearer token:
 
 ```ts
 // app/api/photon/gateway/route.ts
@@ -69,7 +75,10 @@ import { bot } from "@/lib/bot";
 
 export const maxDuration = 800;
 
-export async function GET() {
+export async function GET(request: Request) {
+  if (request.headers.get("authorization") !== `Bearer ${process.env.CRON_SECRET}`) {
+    return new Response("Unauthorized", { status: 401 });
+  }
   await bot.initialize();
   return bot
     .getAdapter("photon")

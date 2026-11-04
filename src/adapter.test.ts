@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import type { ChatInstance, Message } from "chat";
-import { NotImplementedError } from "chat";
+import { NotImplementedError, paragraph, root, text } from "chat";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPhotonAdapter, type PhotonMessage } from "./index";
 
@@ -94,6 +94,7 @@ async function setup() {
         return this;
       },
     }),
+    getUserName: () => "mybot",
     processMessage,
   } as unknown as ChatInstance);
   return adapter;
@@ -448,11 +449,33 @@ describe("fetchMessages", () => {
   });
 });
 
+describe("parseMessage", () => {
+  it("strips Markdown from text, and keeps plain text as sent", async () => {
+    const adapter = await setup();
+    const markdown = adapter.parseMessage({
+      ...received,
+      content: { type: "text", format: "markdown", text: "Hello **world**" },
+    });
+    const plain = adapter.parseMessage({
+      ...received,
+      content: { type: "text", format: "plain", text: "2*3*4 = 24" },
+    });
+
+    expect(markdown.text).toBe("Hello world");
+    expect(plain.text).toBe("2*3*4 = 24");
+    expect(plain.formatted).toEqual(root([paragraph([text("2*3*4 = 24")])]));
+  });
+});
+
 describe("thread IDs", () => {
   it("round-trips and rejects foreign IDs", async () => {
     const adapter = await setup();
     expect(adapter.encodeThreadId(adapter.decodeThreadId(THREAD))).toBe(THREAD);
     expect(adapter.channelIdFromThreadId(THREAD)).toBe(`photon:${SPACE}`);
     expect(() => adapter.decodeThreadId("slack:C1:123")).toThrow();
+  });
+
+  it("answers mentions of the Chat instance's name", async () => {
+    expect((await setup()).userName).toBe("mybot");
   });
 });

@@ -54,6 +54,11 @@ export async function listenForEvents({
   let cursor = (await state.get<number>(cursorKey)) ?? 0;
   let queue = Promise.resolve();
 
+  let stop: () => void = () => undefined;
+  const stopped = new Promise<void>((resolve) => {
+    stop = resolve;
+  });
+
   const socket: Socket<ServerEvents, ClientEvents> = io(baseUrl, {
     path: `/v1/projects/${projectId}/events/ws`,
     addTrailingSlash: false,
@@ -70,10 +75,17 @@ export async function listenForEvents({
           if (timedOut) {
             // Closing the transport makes Socket.IO reconnect and subscribe again.
             socket.io.engine.close();
-          } else if (!result.ok) {
-            logger?.error("Photon websocket subscription rejected", {
-              ...result.error,
-            });
+            return;
+          }
+          if (result.ok) {
+            return;
+          }
+          logger?.error("Photon websocket subscription rejected", {
+            ...result.error,
+          });
+          // Photon closes the connection after a fatal rejection; a non-fatal one would only repeat.
+          if (!result.error.fatal) {
+            stop();
           }
         }
       );
@@ -88,8 +100,9 @@ export async function listenForEvents({
         await state.set(cursorKey, seq);
         cursor = seq;
       })
+      // An event that fails is logged and skipped, so one bad payload can't stall the stream.
       .catch((error: unknown) => {
-        logger?.error("Photon websocket cursor not saved", {
+        logger?.error("Photon websocket event failed", {
           seq,
           error: String(error),
         });
@@ -99,31 +112,37 @@ export async function listenForEvents({
     logger?.warn("Photon websocket delivery error", { ...error });
   });
   socket.on("connect_error", (error) => {
-    logger?.warn("Photon websocket connection failed", {
+    // Socket.IO retries a failed connection unless the server refused it outright.
+    if (socket.active) {
+      logger?.warn("Photon websocket connection failed", {
+        error: error.message,
+      });
+      return;
+    }
+    logger?.error("Photon refused the websocket; listener stopped", {
       error: error.message,
     });
+    stop();
   });
-
-  await new Promise<void>((resolve) => {
-    const stop = () => {
-      clearTimeout(timer);
-      socket.disconnect();
-      resolve();
-    };
-    const timer = Number.isFinite(durationMs)
-      ? setTimeout(stop, durationMs)
-      : undefined;
-    socket.on("disconnect", (reason) => {
-      // Photon disconnects for good only on a protocol violation; anything else reconnects.
-      if (reason === "io server disconnect") {
-        logger?.error("Photon closed the websocket; listener stopped");
-        stop();
-      }
-    });
-    if (abortSignal?.aborted) {
+  socket.on("disconnect", (reason) => {
+    // Photon disconnects for good only on a protocol violation; anything else reconnects.
+    if (reason === "io server disconnect") {
+      logger?.error("Photon closed the websocket; listener stopped");
       stop();
     }
-    abortSignal?.addEventListener("abort", stop, { once: true });
   });
+
+  const timer = Number.isFinite(durationMs)
+    ? setTimeout(stop, durationMs)
+    : undefined;
+  abortSignal?.addEventListener("abort", stop, { once: true });
+  if (abortSignal?.aborted) {
+    stop();
+  }
+  await stopped;
+
+  clearTimeout(timer);
+  abortSignal?.removeEventListener("abort", stop);
+  socket.disconnect();
   await queue;
 }

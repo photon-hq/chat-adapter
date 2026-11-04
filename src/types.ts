@@ -8,7 +8,7 @@ export interface PhotonAdapterConfig {
   logger?: Logger;
   /** Photon project ID. Defaults to `PHOTON_PROJECT_ID`. */
   projectId?: string;
-  /** Bot name matched for @-mentions in group Spaces. Defaults to "photon". */
+  /** Bot name matched for @-mentions in group Spaces. Defaults to the Chat instance's `userName`. */
   userName?: string;
   /** Webhook destination signing secret (`whsec_...`). Defaults to `PHOTON_WEBHOOK_SECRET`. */
   webhookSecret?: string;

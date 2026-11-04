@@ -1,5 +1,12 @@
 import type { Attachment } from "chat";
-import { Message, parseMarkdown } from "chat";
+import {
+  Message,
+  paragraph,
+  parseMarkdown,
+  root,
+  text as textNode,
+  toPlainText,
+} from "chat";
 import type { PhotonClient } from "./client";
 import { attachmentType, type ContentParts } from "./content";
 import type { PhotonAttachment, PhotonMessage } from "./types";
@@ -9,10 +16,10 @@ export async function toChatMessage(
   client: PhotonClient,
   raw: PhotonMessage,
   threadId: string,
-  { text, attachmentIds }: ContentParts
+  parts: ContentParts
 ): Promise<Message<PhotonMessage>> {
   const attachments = await Promise.all(
-    attachmentIds.map((id) =>
+    parts.attachmentIds.map((id) =>
       client
         .request("GET", `/attachments/${id}`, "fetchAttachment")
         .then(async (response) =>
@@ -22,20 +29,24 @@ export async function toChatMessage(
         .catch(() => toAttachment(client, id))
     )
   );
-  return buildChatMessage(raw, threadId, text, attachments);
+  return buildChatMessage(raw, threadId, parts, attachments);
 }
 
 export function buildChatMessage(
   raw: PhotonMessage,
   threadId: string,
-  text: string,
+  { text, markdown }: ContentParts,
   attachments: Attachment[]
 ): Message<PhotonMessage> {
+  // Only Markdown is parsed, so plain text keeps characters like * and _ as sent.
+  const formatted = markdown
+    ? parseMarkdown(text)
+    : root(text ? [paragraph([textNode(text)])] : []);
   return new Message<PhotonMessage>({
     id: raw.id,
     threadId,
-    text,
-    formatted: parseMarkdown(text),
+    text: markdown ? toPlainText(formatted) : text,
+    formatted,
     raw,
     author: {
       userId: raw.sentBy.id,
