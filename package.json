@@ -1,6 +1,6 @@
 {
   "name": "@photon-ai/chat-adapter",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "description": "Photon adapter for Chat SDK: iMessage, SMS, WhatsApp, Telegram, and email through one Photon project",
   "type": "module",
   "main": "./dist/index.js",
@@ -16,7 +16,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup",
+    "build": "tsdown",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "check": "ultracite check",
@@ -36,12 +36,13 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.2",
+    "@changesets/cli": "^3.0.3",
     "@chat-adapter/state-memory": "^4.44.0",
     "@types/mime-types": "^3.0.1",
     "@types/node": "^22.20.5",
     "chat": "^4.44.0",
     "socket.io": "^4.8.4",
-    "tsup": "^8.5.1",
+    "tsdown": "^0.23.5",
     "typescript": "^5.9.3",
     "ultracite": "7.8.4",
     "vitest": "^4.1.12"
