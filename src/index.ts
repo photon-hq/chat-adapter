@@ -1,11 +1,10 @@
-export {
-  createPhotonAdapter,
-  PhotonAdapter,
-  type PhotonAdapterConfig,
-  type PhotonContent,
-  type PhotonEvent,
-  type PhotonMessage,
-  type PhotonSpace,
-  type PhotonThreadId,
-  type PhotonUser,
-} from "./adapter";
+export { createPhotonAdapter, PhotonAdapter } from "./adapter";
+export type {
+  PhotonAdapterConfig,
+  PhotonContent,
+  PhotonEvent,
+  PhotonMessage,
+  PhotonSpace,
+  PhotonThreadId,
+  PhotonUser,
+} from "./types";
