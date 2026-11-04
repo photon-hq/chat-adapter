@@ -105,6 +105,7 @@ Overlapping listeners are fine: Chat SDK drops a message it has already handled.
 | `PHOTON_PROJECT_ID` | `projectId` | The project's ID. Required. |
 | `PHOTON_API_KEY` | `apiKey` | The project API key. Required. |
 | `PHOTON_WEBHOOK_SECRET` | `webhookSecret` | The webhook destination's signing secret. Required to receive messages by webhook. |
+| `PHOTON_AGENT_USER_ID` | `agentUserId` | The Agent User (`pho_usr_...`) that `openDM` starts conversations from. Required for `openDM`. |
 | `PHOTON_API_URL` | `baseUrl` | API origin. Defaults to `https://api.photon.codes`. |
 
 Options passed to `createPhotonAdapter` take precedence over the environment.
@@ -134,6 +135,10 @@ A thread is one Photon Space, as seen by one of your project's Agents (the line 
 | Streaming | Collected and sent once, complete |
 | `edit` / `delete` | `message.update` / `message.delete`, where the platform supports them |
 | `addReaction` | `reaction`, where the platform supports it |
+| `removeReaction` | `message.delete` of the Agent's reaction Message, found among its newest 100 sent Messages in the Space |
+| `openDM` | The direct Space between `agentUserId` and the user, created if needed |
+| `onReaction` | Inbound `reaction` Messages, and removals (a `message.delete` of a reaction Message) |
+| `onMessageUpdated` / `onMessageDeleted` | Inbound `message.update` / `message.delete`, carrying the original Message's ID |
 | `startTyping` | Space typing; a no-op where the platform has none |
 | `fetchMessages` | Space history, paginated |
 | `fetchThread` | The Space |
@@ -146,10 +151,7 @@ Markdown goes to Photon as Markdown, and each platform renders what it can (SMS 
 
 ## Not supported yet
 
-- `removeReaction`: Photon removes a reaction by deleting the reaction's own message, which the adapter doesn't track.
-- Starting a conversation (`openDM`): reply to inbound messages, or create the Space through the Photon API first.
-- Cards and modals: cards are sent as their fallback text.
-- Inbound reactions, edits, and deletes are acknowledged but not routed to handlers.
+- Cards and modals: Photon content has no buttons or other actions, so cards are sent as their fallback text and modals can't open.
 
 ## License
 

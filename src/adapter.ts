@@ -25,7 +25,12 @@ import { PhotonClient } from "./client";
 import { NAME } from "./constants";
 import { readContent, toTextContent } from "./content";
 import { listenForEvents } from "./gateway";
-import { buildChatMessage, toAttachment, toChatMessage } from "./message";
+import {
+  buildChatMessage,
+  toAttachment,
+  toAuthor,
+  toChatMessage,
+} from "./message";
 import type {
   PhotonAdapterConfig,
   PhotonContent,
@@ -33,6 +38,7 @@ import type {
   PhotonMessage,
   PhotonSpace,
   PhotonThreadId,
+  PhotonUser,
 } from "./types";
 import { decodeWebhookSecret, verifyWebhookSignature } from "./webhook";
 
@@ -44,6 +50,7 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
   readonly name = NAME;
   userName: string;
 
+  private readonly agentUserId?: string;
   private chat: ChatInstance | null = null;
   private readonly client: PhotonClient;
   private logger?: Logger;
@@ -78,6 +85,7 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
     });
     this.userName = config.userName ?? "";
     this.logger = config.logger;
+    this.agentUserId = config.agentUserId ?? process.env.PHOTON_AGENT_USER_ID;
   }
 
   async initialize(chat: ChatInstance): Promise<void> {
@@ -280,11 +288,82 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
     );
   }
 
-  async removeReaction(): Promise<void> {
-    throw new NotImplementedError(
-      "Photon removes a reaction by deleting the reaction's own Message, which this adapter does not track",
+  // Photon removes a reaction by deleting the reaction's own Message, so this
+  // finds the Agent's reaction Message that no later delete has removed.
+  async removeReaction(
+    threadId: string,
+    messageId: string,
+    emoji: EmojiValue | string
+  ): Promise<void> {
+    const { spaceId, agentUserId } = this.decodeThreadId(threadId);
+    const reaction = defaultEmojiResolver.toGChat(emoji);
+    // shortcut: searches the Agent's newest 100 sent Messages in the Space; page further back if older reactions must be removable.
+    const query = new URLSearchParams({
+      spaceId,
+      perspectiveUserId: agentUserId,
+      direction: "sent",
+      order: "desc",
+      pageSize: "100",
+    });
+    const response = await this.client.request(
+      "GET",
+      `/messages?${query}`,
       "removeReaction"
     );
+    const { items } = (await response.json()) as { items: PhotonMessage[] };
+    const deleted = new Set(
+      items
+        .filter(({ content }) => content.type === "message.delete")
+        .map(({ parentMessageId }) => parentMessageId)
+    );
+    const own = items.find(
+      (item) =>
+        item.content.type === "reaction" &&
+        item.content.reaction === reaction &&
+        item.parentMessageId === messageId &&
+        item.sentBy.id === agentUserId &&
+        !deleted.has(item.id)
+    );
+    if (own) {
+      await this.send(
+        threadId,
+        { type: "message.delete" },
+        "removeReaction",
+        own.id
+      );
+    }
+  }
+
+  /** Opens the direct Space between `agentUserId` and a Photon User, creating it when needed. */
+  async openDM(userId: string): Promise<string> {
+    const { agentUserId } = this;
+    if (!agentUserId) {
+      throw new ValidationError(
+        NAME,
+        "openDM needs agentUserId (or PHOTON_AGENT_USER_ID), the Agent User that starts the conversation"
+      );
+    }
+    const userResponse = await this.client.request(
+      "GET",
+      `/users/${userId}`,
+      "openDM"
+    );
+    const { platform } = (await userResponse.json()) as PhotonUser;
+    const spaceResponse = await this.client.request(
+      "POST",
+      "/spaces",
+      "openDM",
+      {
+        json: { participantIds: [agentUserId, userId], platform },
+        idempotent: true,
+      }
+    );
+    const space = (await spaceResponse.json()) as PhotonSpace;
+    return this.encodeThreadId({
+      spaceId: space.id,
+      agentUserId,
+      spaceKind: space.kind,
+    });
   }
 
   // Typing is cosmetic, so a platform without it makes this a no-op instead of failing the reply.
@@ -389,7 +468,10 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
       : attachment;
   }
 
-  /** Routes `message.received` into the Chat SDK; every other event is ignored. */
+  /**
+   * Routes `message.received` into the Chat SDK: reactions, edits, and deletes
+   * to their own handlers, everything else as a message. Other events are ignored.
+   */
   private routeEvent(event: PhotonEvent, options?: WebhookOptions): void {
     const raw = event.data?.object;
     if (event.type !== "message.received" || !raw) {
@@ -402,7 +484,51 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
       });
       return;
     }
-    const parts = readContent(raw.content);
+    const { content, parentMessageId } = raw;
+    if (parentMessageId && content.type === "reaction") {
+      this.chat?.processReaction(
+        {
+          adapter: this,
+          added: true,
+          emoji: defaultEmojiResolver.fromGChat(content.reaction as string),
+          rawEmoji: content.reaction as string,
+          messageId: parentMessageId,
+          threadId,
+          user: toAuthor(raw),
+          raw,
+        },
+        options
+      );
+      return;
+    }
+    if (parentMessageId && content.type === "message.update") {
+      const updated = content.content as PhotonContent;
+      this.chat?.processMessageUpdated(
+        {
+          adapter: this,
+          threadId,
+          message: async () => {
+            const message = await toChatMessage(
+              this.client,
+              { ...raw, id: parentMessageId, content: updated },
+              threadId,
+              readContent(updated)
+            );
+            message.metadata.edited = true;
+            message.metadata.editedAt = message.metadata.dateSent;
+            return message;
+          },
+        },
+        options
+      );
+      return;
+    }
+    if (parentMessageId && content.type === "message.delete") {
+      const routed = this.routeDelete(raw, parentMessageId, threadId, options);
+      options?.waitUntil?.(routed);
+      return;
+    }
+    const parts = readContent(content);
     if (!(parts.text || parts.attachmentIds.length)) {
       return;
     }
@@ -410,6 +536,60 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
       this,
       threadId,
       () => toChatMessage(this.client, raw, threadId, parts),
+      options
+    );
+  }
+
+  // A removed reaction arrives as the deletion of the reaction's own Message,
+  // so the deleted Message decides which handler hears about it.
+  private async routeDelete(
+    raw: PhotonMessage,
+    deletedId: string,
+    threadId: string,
+    options?: WebhookOptions
+  ): Promise<void> {
+    let deleted: PhotonMessage;
+    try {
+      const response = await this.client.request(
+        "GET",
+        `/messages/${deletedId}`,
+        "handleWebhook"
+      );
+      deleted = (await response.json()) as PhotonMessage;
+    } catch (error) {
+      this.logger?.error("Photon delete could not be routed", {
+        messageId: raw.id,
+        error: String(error),
+      });
+      return;
+    }
+    if (deleted.content.type === "reaction" && deleted.parentMessageId) {
+      await this.chat?.processReaction(
+        {
+          adapter: this,
+          added: false,
+          emoji: defaultEmojiResolver.fromGChat(
+            deleted.content.reaction as string
+          ),
+          rawEmoji: deleted.content.reaction as string,
+          messageId: deleted.parentMessageId,
+          threadId,
+          user: toAuthor(raw),
+          raw,
+        },
+        options
+      );
+      return;
+    }
+    await this.chat?.processMessageDeleted(
+      {
+        adapter: this,
+        channelId: this.channelIdFromThreadId(threadId),
+        threadId,
+        messageId: deletedId,
+        deletedAt: new Date(raw.timestamps.receivedAt ?? raw.createdAt),
+        raw,
+      },
       options
     );
   }

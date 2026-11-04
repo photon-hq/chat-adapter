@@ -1,4 +1,4 @@
-import type { Attachment } from "chat";
+import type { Attachment, Author } from "chat";
 import {
   Message,
   paragraph,
@@ -50,13 +50,7 @@ export function buildChatMessage(
     text: markdown ? toPlainText(formatted) : text,
     formatted,
     raw,
-    author: {
-      userId: raw.sentBy.id,
-      userName: raw.sentBy.handle,
-      fullName: raw.sentBy.handle,
-      isBot: raw.sentBy.kind === "agent",
-      isMe: raw.status !== "received",
-    },
+    author: toAuthor(raw),
     metadata: {
       dateSent: new Date(
         raw.timestamps.receivedAt ??
@@ -67,6 +61,16 @@ export function buildChatMessage(
     },
     attachments,
   });
+}
+
+export function toAuthor(raw: PhotonMessage): Author {
+  return {
+    userId: raw.sentBy.id,
+    userName: raw.sentBy.handle,
+    fullName: raw.sentBy.handle,
+    isBot: raw.sentBy.kind === "agent",
+    isMe: raw.status !== "received",
+  };
 }
 
 export function toAttachment(
