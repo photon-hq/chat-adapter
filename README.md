@@ -108,6 +108,7 @@ Options passed to `createPhotonAdapter` take precedence over the environment.
 [`examples/echo.ts`](examples/echo.ts) texts back whatever it receives, over the websocket. Text it from your own phone, not from another line in the same project: Photon reports the sender of a received message as a human even when it is your other line, so `message.author.isBot` is false and the two lines would echo each other until you stop the bot.
 
 ```sh
+git clone https://github.com/photon-hq/chat-adapter && cd chat-adapter
 pnpm install && pnpm build
 PHOTON_PROJECT_ID=pho_prj_... PHOTON_API_KEY=pho_sk_... node examples/echo.ts
 ```
