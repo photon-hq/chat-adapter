@@ -119,7 +119,7 @@ pnpm install && pnpm build
 PHOTON_PROJECT_ID=pho_prj_... PHOTON_API_KEY=pho_sk_... node examples/echo.ts
 ```
 
-Node 22.18 or newer runs the TypeScript file as is.
+Building and checking the repo (`pnpm build`, `pnpm check`) needs Node 22.22.2 or newer, or 24.15 or newer, and that Node runs the TypeScript file as is. The published package itself runs on Node 20 or newer.
 
 ## Threads
 
