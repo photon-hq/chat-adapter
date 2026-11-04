@@ -50,8 +50,8 @@ export function buildChatMessage(
     raw,
     author: {
       userId: raw.sentBy.id,
-      userName: raw.sentBy.handle,
-      fullName: raw.sentBy.handle,
+      userName: raw.sentBy.handle ?? raw.sentBy.id,
+      fullName: raw.sentBy.handle ?? raw.sentBy.id,
       isBot: raw.sentBy.kind === "agent",
       isMe: raw.status !== "received",
     },
