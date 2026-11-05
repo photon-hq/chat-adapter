@@ -1,6 +1,5 @@
 import { createHmac } from "node:crypto";
 
-import { createMemoryState } from "@chat-adapter/state-memory";
 import type { ChatInstance, Message } from "chat";
 import { emoji, NotImplementedError, paragraph, root, text } from "chat";
 import { describe, expect, it, vi } from "vitest";
@@ -113,8 +112,6 @@ async function setup(config: PhotonAdapterConfig = {}) {
     webhookSecret: SECRET,
     ...config,
   });
-  const state = createMemoryState();
-  await state.connect();
   processMessage = vi.fn<ChatInstance["processMessage"]>();
   processReaction = vi.fn<ChatInstance["processReaction"]>();
   processMessageUpdated = vi.fn<ChatInstance["processMessageUpdated"]>();
@@ -130,7 +127,6 @@ async function setup(config: PhotonAdapterConfig = {}) {
       },
     }),
     getUserName: () => "mybot",
-    getState: () => state,
     processMessage,
     processReaction,
     processMessageUpdated,
@@ -487,37 +483,6 @@ describe("sending", () => {
     await expect(
       adapter.editMessage(THREAD, "pho_msg_00000000000000000000000002", "x")
     ).rejects.toBeInstanceOf(NotImplementedError);
-  });
-
-  it("removes a reaction it added by deleting that reaction's Message", async () => {
-    const adapter = await setup();
-    const parent = "pho_msg_00000000000000000000000002";
-    const reaction = "pho_msg_00000000000000000000000008";
-    fetchMock
-      .mockResolvedValueOnce(json({ ...received, id: reaction }, 202))
-      .mockResolvedValueOnce(sent({}));
-
-    await adapter.addReaction(THREAD, parent, emoji.thumbs_up);
-    await adapter.removeReaction(THREAD, parent, emoji.thumbs_up);
-    await adapter.removeReaction(THREAD, parent, emoji.thumbs_up);
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(JSON.parse(call(1).body as string)).toStrictEqual({
-      spaceId: SPACE,
-      senderId: AGENT,
-      content: { type: "message.delete" },
-      parentMessageId: reaction,
-    });
-  });
-
-  it("leaves alone a reaction it didn't add", async () => {
-    const adapter = await setup();
-    await adapter.removeReaction(
-      THREAD,
-      "pho_msg_00000000000000000000000002",
-      emoji.thumbs_up
-    );
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("opens a DM from the configured Agent", async () => {

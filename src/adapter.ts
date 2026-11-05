@@ -45,8 +45,6 @@ import { decodeWebhookSecret, verifyWebhookSignature } from "./webhook";
 const DEFAULT_BASE_URL = "https://api.photon.codes";
 const HISTORY_EXCLUDED_CONTENT = "message.read,space.typing.update";
 const TRAILING_SLASHES = /\/+$/u;
-// shortcut: a reaction older than this can't be removed; raise it if bots remove reactions later than that.
-const REACTION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
   readonly name = NAME;
@@ -277,58 +275,24 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
     );
   }
 
-  // Photon removes a reaction by deleting the reaction's own Message, and its
-  // API can't look reactions up by target, so this remembers each one's ID.
   async addReaction(
     threadId: string,
     messageId: string,
     emoji: EmojiValue | string
   ): Promise<void> {
-    const reaction = defaultEmojiResolver.toGChat(emoji);
-    const sent = await this.send(
+    await this.send(
       threadId,
-      { type: "reaction", reaction },
+      { type: "reaction", reaction: defaultEmojiResolver.toGChat(emoji) },
       "addReaction",
       messageId
     );
-    await this.chat
-      ?.getState()
-      .set(
-        this.reactionKey(threadId, messageId, reaction),
-        sent.id,
-        REACTION_TTL_MS
-      );
   }
 
-  async removeReaction(
-    threadId: string,
-    messageId: string,
-    emoji: EmojiValue | string
-  ): Promise<void> {
-    const state = this.chat?.getState();
-    const key = this.reactionKey(
-      threadId,
-      messageId,
-      defaultEmojiResolver.toGChat(emoji)
+  async removeReaction(): Promise<void> {
+    throw new NotImplementedError(
+      "Photon removes a reaction by deleting the reaction's own Message, which can't be found from the reacted Message",
+      "removeReaction"
     );
-    const reactionId = await state?.get<string>(key);
-    if (!reactionId) {
-      this.logger?.warn(
-        "No reaction to remove: this adapter didn't add it, or added it over 30 days ago",
-        {
-          messageId,
-          emoji: String(emoji),
-        }
-      );
-      return;
-    }
-    await this.send(
-      threadId,
-      { type: "message.delete" },
-      "removeReaction",
-      reactionId
-    );
-    await state?.delete(key);
   }
 
   /** Opens the direct Space between `agentUserId` and a Photon User, creating it when needed. */
@@ -589,10 +553,6 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
       },
       options
     );
-  }
-
-  private reactionKey(threadId: string, messageId: string, reaction: string) {
-    return `${NAME}:reaction:${this.decodeThreadId(threadId).agentUserId}:${messageId}:${reaction}`;
   }
 
   private threadIdOf(raw: PhotonMessage): string | undefined {

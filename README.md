@@ -135,7 +135,6 @@ A thread is one Photon Space, as seen by one of your project's Agents (the line 
 | Streaming | Collected and sent once, complete |
 | `edit` / `delete` | `message.update` / `message.delete`, where the platform supports them |
 | `addReaction` | `reaction`, where the platform supports it |
-| `removeReaction` | `message.delete` of the reaction Message `addReaction` sent, whose ID is kept in the Chat state for 30 days |
 | `openDM` | The direct Space between `agentUserId` and the user, created if needed |
 | `onReaction` | Inbound `reaction` Messages, and removals (a `message.delete` of a reaction Message) |
 | `onMessageUpdated` / `onMessageDeleted` | Inbound `message.update` / `message.delete`, carrying the original Message's ID |
@@ -151,6 +150,7 @@ Markdown goes to Photon as Markdown, and each platform renders what it can (SMS 
 
 ## Not supported yet
 
+- `removeReaction`: Chat SDK names a reaction by the message it's on and its emoji, but Photon removes a reaction by deleting the reaction's own message, which its API can't look up from the reacted message.
 - Cards and modals: Photon content has no buttons or other actions, so cards are sent as their fallback text and modals can't open.
 
 ## License
