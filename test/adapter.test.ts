@@ -1,12 +1,12 @@
 import { createHmac } from "node:crypto";
 
 import type { ChatInstance, Message } from "chat";
-import { NotImplementedError, paragraph, root, text } from "chat";
+import { emoji, NotImplementedError, paragraph, root, text } from "chat";
 import { describe, expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
 
 import { createPhotonAdapter } from "../src/index";
-import type { PhotonMessage } from "../src/index";
+import type { PhotonAdapterConfig, PhotonMessage } from "../src/index";
 
 const SECRET = `whsec_${Buffer.alloc(32, 7).toString("base64")}`;
 const PROJECT = "pho_prj_00000000000000000000000001";
@@ -99,16 +99,23 @@ async function* chunks() {
 
 let fetchMock: Mock<typeof fetch>;
 let processMessage: Mock<ChatInstance["processMessage"]>;
+let processReaction: Mock<ChatInstance["processReaction"]>;
+let processMessageUpdated: Mock<ChatInstance["processMessageUpdated"]>;
+let processMessageDeleted: Mock<ChatInstance["processMessageDeleted"]>;
 
-async function setup() {
+async function setup(config: PhotonAdapterConfig = {}) {
   fetchMock = vi.fn<typeof fetch>();
   vi.stubGlobal("fetch", fetchMock);
   const adapter = createPhotonAdapter({
     projectId: PROJECT,
     apiKey: "pho_sk_test",
     webhookSecret: SECRET,
+    ...config,
   });
   processMessage = vi.fn<ChatInstance["processMessage"]>();
+  processReaction = vi.fn<ChatInstance["processReaction"]>();
+  processMessageUpdated = vi.fn<ChatInstance["processMessageUpdated"]>();
+  processMessageDeleted = vi.fn<ChatInstance["processMessageDeleted"]>();
   await adapter.initialize({
     getLogger: () => ({
       debug() {},
@@ -121,7 +128,24 @@ async function setup() {
     }),
     getUserName: () => "mybot",
     processMessage,
+    processReaction,
+    processMessageUpdated,
+    processMessageDeleted,
   } as unknown as ChatInstance);
+  return adapter;
+}
+
+/** Delivers a webhook, answering the adapter's API calls with `responses`, and waits for its routing to finish. */
+async function receive(request: Request, ...responses: Response[]) {
+  const adapter = await setup();
+  for (const response of responses) {
+    fetchMock.mockResolvedValueOnce(response);
+  }
+  const tasks: Promise<unknown>[] = [];
+  await adapter.handleWebhook(request, {
+    waitUntil: (task) => tasks.push(task),
+  });
+  await Promise.all(tasks);
   return adapter;
 }
 
@@ -232,6 +256,101 @@ describe("handleWebhook", () => {
     );
     expect(response.status).toBe(200);
     expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  const ORIGINAL = "pho_msg_00000000000000000000000005";
+  const inbound = (object: Partial<PhotonMessage>) =>
+    signedRequest({
+      ...event,
+      data: {
+        projectId: PROJECT,
+        object: { ...received, parentMessageId: ORIGINAL, ...object },
+      },
+    });
+
+  it("routes an inbound reaction to the reaction handlers", async () => {
+    const adapter = await receive(
+      inbound({ content: { type: "reaction", reaction: "👍" } })
+    );
+    expect(processReaction).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        adapter,
+        added: true,
+        emoji: emoji.thumbs_up,
+        rawEmoji: "👍",
+        messageId: ORIGINAL,
+        threadId: THREAD,
+        user: expect.objectContaining({ userId: PEER, isMe: false }),
+      }),
+      expect.anything()
+    );
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  it("routes an inbound edit as the updated original Message", async () => {
+    await receive(
+      inbound({
+        content: {
+          type: "message.update",
+          content: { type: "text", format: "plain", text: "fixed" },
+        },
+      })
+    );
+    const update = processMessageUpdated.mock.calls[0]?.[0];
+    expect(update?.threadId).toBe(THREAD);
+    const factory = update?.message as () => Promise<Message>;
+    await expect(factory()).resolves.toMatchObject({
+      id: ORIGINAL,
+      text: "fixed",
+      metadata: { edited: true },
+    });
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  it("routes the removal of a reaction, which deletes the reaction's Message", async () => {
+    const reaction = "pho_msg_00000000000000000000000006";
+    await receive(
+      inbound({
+        parentMessageId: reaction,
+        content: { type: "message.delete" },
+      }),
+      json({
+        ...received,
+        id: reaction,
+        parentMessageId: ORIGINAL,
+        content: { type: "reaction", reaction: "❤️" },
+      })
+    );
+    expect(call(0).url.pathname).toBe(
+      `/v1/projects/${PROJECT}/messages/${reaction}`
+    );
+    expect(processReaction).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        added: false,
+        emoji: emoji.heart,
+        messageId: ORIGINAL,
+        threadId: THREAD,
+      }),
+      expect.anything()
+    );
+    expect(processMessageDeleted).not.toHaveBeenCalled();
+  });
+
+  it("routes the deletion of any other Message to the delete handlers", async () => {
+    const adapter = await receive(
+      inbound({ content: { type: "message.delete" } }),
+      json({ ...received, id: ORIGINAL })
+    );
+    expect(processMessageDeleted).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        adapter,
+        messageId: ORIGINAL,
+        threadId: THREAD,
+        channelId: `photon:${SPACE}`,
+      }),
+      expect.anything()
+    );
+    expect(processReaction).not.toHaveBeenCalled();
   });
 });
 
@@ -364,6 +483,28 @@ describe("sending", () => {
     await expect(
       adapter.editMessage(THREAD, "pho_msg_00000000000000000000000002", "x")
     ).rejects.toBeInstanceOf(NotImplementedError);
+  });
+
+  it("opens a DM from the configured Agent", async () => {
+    const adapter = await setup({ agentUserId: AGENT });
+    fetchMock
+      .mockResolvedValueOnce(json({ ...received.sentBy }))
+      .mockResolvedValueOnce(json({ ...received.space }));
+
+    await expect(adapter.openDM(PEER)).resolves.toBe(THREAD);
+    expect(call(0).url.pathname).toBe(`/v1/projects/${PROJECT}/users/${PEER}`);
+    expect(JSON.parse(call(1).body as string)).toStrictEqual({
+      participantIds: [AGENT, PEER],
+      platform: "imessage",
+    });
+    expect(call(1).headers.get("idempotency-key")).toMatch(UUID);
+  });
+
+  it("needs an Agent to open a DM from", async () => {
+    const adapter = await setup();
+    await expect(adapter.openDM(PEER)).rejects.toThrow(
+      "openDM needs agentUserId"
+    );
   });
 
   it("starts typing as the thread's Agent", async () => {

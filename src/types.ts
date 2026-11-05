@@ -1,6 +1,8 @@
 import type { Logger } from "chat";
 
 export interface PhotonAdapterConfig {
+  /** Agent User (`pho_usr_...`) that `openDM` starts conversations from. Defaults to `PHOTON_AGENT_USER_ID`. */
+  agentUserId?: string;
   /** Project API key (`pho_sk_...`). Defaults to `PHOTON_API_KEY`. */
   apiKey?: string;
   /** Photon API origin. Defaults to `PHOTON_API_URL`, then https://api.photon.codes. */
