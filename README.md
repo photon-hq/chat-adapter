@@ -155,4 +155,4 @@ Markdown goes to Photon as Markdown, and each platform renders what it can (SMS 
 
 ## License
 
-MIT
+Apache-2.0
