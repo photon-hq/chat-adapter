@@ -18,7 +18,7 @@
   "bugs": {
     "url": "https://github.com/photon-hq/chat-adapter/issues"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "author": "photon",
   "repository": {
     "type": "git",
