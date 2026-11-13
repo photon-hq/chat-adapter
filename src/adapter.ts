@@ -43,7 +43,6 @@ import type {
 import { decodeWebhookSecret, verifyWebhookSignature } from "./webhook";
 
 const DEFAULT_BASE_URL = "https://api.photon.codes";
-const HISTORY_EXCLUDED_CONTENT = "message.read,space.typing.update";
 const TRAILING_SLASHES = /\/+$/u;
 
 export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
@@ -361,7 +360,6 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
       perspectiveUserId: agentUserId,
       pageSize: String(options.limit ?? 50),
       order: forward ? "asc" : "desc",
-      excludeContentTypes: HISTORY_EXCLUDED_CONTENT,
     });
     if (options.cursor) {
       query.set("pageToken", options.cursor);

@@ -25,7 +25,7 @@ export interface PhotonThreadId {
 }
 
 export interface PhotonUser {
-  handle: string;
+  handle?: string;
   id: string;
   kind: string;
   platform: string;
