@@ -9,6 +9,7 @@ import type {
   FetchResult,
   FormattedContent,
   Logger,
+  Message,
   RawMessage,
   StreamChunk,
   ThreadInfo,
@@ -16,15 +17,20 @@ import type {
 } from "chat";
 import {
   defaultEmojiResolver,
-  type Message,
   NotImplementedError,
   stringifyMarkdown,
 } from "chat";
+
 import { PhotonClient } from "./client";
 import { NAME } from "./constants";
 import { readContent, toTextContent } from "./content";
 import { listenForEvents } from "./gateway";
-import { buildChatMessage, toAttachment, toChatMessage } from "./message";
+import {
+  buildChatMessage,
+  toAttachment,
+  toAuthor,
+  toChatMessage,
+} from "./message";
 import type {
   PhotonAdapterConfig,
   PhotonContent,
@@ -32,16 +38,18 @@ import type {
   PhotonMessage,
   PhotonSpace,
   PhotonThreadId,
+  PhotonUser,
 } from "./types";
 import { decodeWebhookSecret, verifyWebhookSignature } from "./webhook";
 
 const DEFAULT_BASE_URL = "https://api.photon.codes";
-const TRAILING_SLASHES = /\/+$/;
+const TRAILING_SLASHES = /\/+$/u;
 
 export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
   readonly name = NAME;
   userName: string;
 
+  private readonly agentUserId?: string;
   private chat: ChatInstance | null = null;
   private readonly client: PhotonClient;
   private logger?: Logger;
@@ -76,6 +84,7 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
     });
     this.userName = config.userName ?? "";
     this.logger = config.logger;
+    this.agentUserId = config.agentUserId ?? process.env.PHOTON_AGENT_USER_ID;
   }
 
   async initialize(chat: ChatInstance): Promise<void> {
@@ -170,18 +179,24 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
     if (!this.chat) {
       return new Response("Chat instance not initialized", { status: 500 });
     }
-    const listener = listenForEvents({
+    const gateway = {
       ...this.client.options,
       abortSignal,
       durationMs,
       logger: this.logger,
-      onEvent: (event) => this.routeEvent(event, options),
+      onEvent: (event: PhotonEvent) => this.routeEvent(event, options),
       state: this.chat.getState(),
-    }).catch((error: unknown) => {
-      this.logger?.error("Photon websocket listener failed", {
-        error: String(error),
-      });
-    });
+    };
+    const listen = async () => {
+      try {
+        await listenForEvents(gateway);
+      } catch (error) {
+        this.logger?.error("Photon websocket listener failed", {
+          error: String(error),
+        });
+      }
+    };
+    const listener = listen();
     options.waitUntil?.(listener);
     return Response.json({ status: "listening", durationMs });
   }
@@ -200,6 +215,8 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
     if (text) {
       sent.push(await this.send(threadId, text, "postMessage"));
     }
+    // Each file goes out as its own Message, in the order given.
+    /* oxlint-disable no-await-in-loop */
     for (const file of files) {
       const attachmentId = await this.client.upload(file);
       sent.push(
@@ -210,6 +227,7 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
         )
       );
     }
+    /* oxlint-enable no-await-in-loop */
     return sent[0] as RawMessage<PhotonMessage>;
   }
 
@@ -271,9 +289,41 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
 
   async removeReaction(): Promise<void> {
     throw new NotImplementedError(
-      "Photon removes a reaction by deleting the reaction's own Message, which this adapter does not track",
+      "Photon removes a reaction by deleting the reaction's own Message, which can't be found from the reacted Message",
       "removeReaction"
     );
+  }
+
+  /** Opens the direct Space between `agentUserId` and a Photon User, creating it when needed. */
+  async openDM(userId: string): Promise<string> {
+    const { agentUserId } = this;
+    if (!agentUserId) {
+      throw new ValidationError(
+        NAME,
+        "openDM needs agentUserId (or PHOTON_AGENT_USER_ID), the Agent User that starts the conversation"
+      );
+    }
+    const userResponse = await this.client.request(
+      "GET",
+      `/users/${userId}`,
+      "openDM"
+    );
+    const { platform } = (await userResponse.json()) as PhotonUser;
+    const spaceResponse = await this.client.request(
+      "POST",
+      "/spaces",
+      "openDM",
+      {
+        json: { participantIds: [agentUserId, userId], platform },
+        idempotent: true,
+      }
+    );
+    const space = (await spaceResponse.json()) as PhotonSpace;
+    return this.encodeThreadId({
+      spaceId: space.id,
+      agentUserId,
+      spaceKind: space.kind,
+    });
   }
 
   // Typing is cosmetic, so a platform without it makes this a no-op instead of failing the reply.
@@ -314,11 +364,17 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
     if (options.cursor) {
       query.set("pageToken", options.cursor);
     }
-    const page = (await (
-      await this.client.request("GET", `/messages?${query}`, "fetchMessages")
-    ).json()) as { items: PhotonMessage[]; nextPageToken?: string };
+    const response = await this.client.request(
+      "GET",
+      `/messages?${query}`,
+      "fetchMessages"
+    );
+    const page = (await response.json()) as {
+      items: PhotonMessage[];
+      nextPageToken?: string;
+    };
 
-    const items = forward ? page.items : [...page.items].reverse();
+    const items = forward ? page.items : page.items.toReversed();
     const messages = await Promise.all(
       items
         .map((raw) => ({ raw, parts: readContent(raw.content) }))
@@ -332,9 +388,12 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
 
   async fetchThread(threadId: string): Promise<ThreadInfo> {
     const { spaceId } = this.decodeThreadId(threadId);
-    const space = (await (
-      await this.client.request("GET", `/spaces/${spaceId}`, "fetchThread")
-    ).json()) as PhotonSpace;
+    const response = await this.client.request(
+      "GET",
+      `/spaces/${spaceId}`,
+      "fetchThread"
+    );
+    const space = (await response.json()) as PhotonSpace;
     return {
       id: threadId,
       channelId: this.channelIdFromThreadId(threadId),
@@ -368,7 +427,10 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
       : attachment;
   }
 
-  /** Routes `message.received` into the Chat SDK; every other event is ignored. */
+  /**
+   * Routes `message.received` into the Chat SDK: reactions, edits, and deletes
+   * to their own handlers, everything else as a message. Other events are ignored.
+   */
   private routeEvent(event: PhotonEvent, options?: WebhookOptions): void {
     const raw = event.data?.object;
     if (event.type !== "message.received" || !raw) {
@@ -381,7 +443,51 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
       });
       return;
     }
-    const parts = readContent(raw.content);
+    const { content, parentMessageId } = raw;
+    if (parentMessageId && content.type === "reaction") {
+      this.chat?.processReaction(
+        {
+          adapter: this,
+          added: true,
+          emoji: defaultEmojiResolver.fromGChat(content.reaction as string),
+          rawEmoji: content.reaction as string,
+          messageId: parentMessageId,
+          threadId,
+          user: toAuthor(raw),
+          raw,
+        },
+        options
+      );
+      return;
+    }
+    if (parentMessageId && content.type === "message.update") {
+      const updated = content.content as PhotonContent;
+      this.chat?.processMessageUpdated(
+        {
+          adapter: this,
+          threadId,
+          message: async () => {
+            const message = await toChatMessage(
+              this.client,
+              { ...raw, id: parentMessageId, content: updated },
+              threadId,
+              readContent(updated)
+            );
+            message.metadata.edited = true;
+            message.metadata.editedAt = message.metadata.dateSent;
+            return message;
+          },
+        },
+        options
+      );
+      return;
+    }
+    if (parentMessageId && content.type === "message.delete") {
+      const routed = this.routeDelete(raw, parentMessageId, threadId, options);
+      options?.waitUntil?.(routed);
+      return;
+    }
+    const parts = readContent(content);
     if (!(parts.text || parts.attachmentIds.length)) {
       return;
     }
@@ -389,6 +495,60 @@ export class PhotonAdapter implements Adapter<PhotonThreadId, PhotonMessage> {
       this,
       threadId,
       () => toChatMessage(this.client, raw, threadId, parts),
+      options
+    );
+  }
+
+  // A removed reaction arrives as the deletion of the reaction's own Message,
+  // so the deleted Message decides which handler hears about it.
+  private async routeDelete(
+    raw: PhotonMessage,
+    deletedId: string,
+    threadId: string,
+    options?: WebhookOptions
+  ): Promise<void> {
+    let deleted: PhotonMessage;
+    try {
+      const response = await this.client.request(
+        "GET",
+        `/messages/${deletedId}`,
+        "handleWebhook"
+      );
+      deleted = (await response.json()) as PhotonMessage;
+    } catch (error) {
+      this.logger?.error("Photon delete could not be routed", {
+        messageId: raw.id,
+        error: String(error),
+      });
+      return;
+    }
+    if (deleted.content.type === "reaction" && deleted.parentMessageId) {
+      await this.chat?.processReaction(
+        {
+          adapter: this,
+          added: false,
+          emoji: defaultEmojiResolver.fromGChat(
+            deleted.content.reaction as string
+          ),
+          rawEmoji: deleted.content.reaction as string,
+          messageId: deleted.parentMessageId,
+          threadId,
+          user: toAuthor(raw),
+          raw,
+        },
+        options
+      );
+      return;
+    }
+    await this.chat?.processMessageDeleted(
+      {
+        adapter: this,
+        channelId: this.channelIdFromThreadId(threadId),
+        threadId,
+        messageId: deletedId,
+        deletedAt: new Date(raw.timestamps.receivedAt ?? raw.createdAt),
+        raw,
+      },
       options
     );
   }

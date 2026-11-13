@@ -1,0 +1,35 @@
+name: Publish staging
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        type: boolean
+        default: true
+        description: Verify and pack only
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-staging
+  cancel-in-progress: false
+
+jobs:
+  stage:
+    uses: photon-hq/buildspace/.github/workflows/package-stage.yml@c1fb06e4ae457a8e053642a914bd37b8f5ce9e1b
+    permissions:
+      contents: write
+      packages: write
+      actions: read
+      attestations: write
+      id-token: write
+      pull-requests: read
+    with:
+      registry: https://registry.npmjs.org
+      package: "@photon-ai/chat-adapter"
+      ci-workflow: ci.yml
+      pack: node scripts/pack-release.mjs
+      dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}

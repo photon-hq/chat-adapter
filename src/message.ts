@@ -1,4 +1,4 @@
-import type { Attachment } from "chat";
+import type { Attachment, Author } from "chat";
 import {
   Message,
   paragraph,
@@ -7,8 +7,10 @@ import {
   text as textNode,
   toPlainText,
 } from "chat";
+
 import type { PhotonClient } from "./client";
-import { attachmentType, type ContentParts } from "./content";
+import type { ContentParts } from "./content";
+import { attachmentType } from "./content";
 import type { PhotonAttachment, PhotonMessage } from "./types";
 
 /** Builds a Chat SDK Message, looking up each attachment's name, type, and size. */
@@ -48,13 +50,7 @@ export function buildChatMessage(
     text: markdown ? toPlainText(formatted) : text,
     formatted,
     raw,
-    author: {
-      userId: raw.sentBy.id,
-      userName: raw.sentBy.handle ?? raw.sentBy.id,
-      fullName: raw.sentBy.handle ?? raw.sentBy.id,
-      isBot: raw.sentBy.kind === "agent",
-      isMe: raw.status !== "received",
-    },
+    author: toAuthor(raw),
     metadata: {
       dateSent: new Date(
         raw.timestamps.receivedAt ??
@@ -65,6 +61,16 @@ export function buildChatMessage(
     },
     attachments,
   });
+}
+
+export function toAuthor(raw: PhotonMessage): Author {
+  return {
+    userId: raw.sentBy.id,
+    userName: raw.sentBy.handle ?? raw.sentBy.id,
+    fullName: raw.sentBy.handle ?? raw.sentBy.id,
+    isBot: raw.sentBy.kind === "agent",
+    isMe: raw.status !== "received",
+  };
 }
 
 export function toAttachment(

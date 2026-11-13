@@ -15,9 +15,9 @@ The examples keep Chat SDK's state in Redis: `createRedisState()` reads `REDIS_U
 ## Usage
 
 ```ts
-import { Chat } from "chat";
-import { createPhotonAdapter } from "@photon-ai/chat-adapter";
 import { createRedisState } from "@chat-adapter/state-redis";
+import { createPhotonAdapter } from "@photon-ai/chat-adapter";
+import { Chat } from "chat";
 
 export const bot = new Chat({
   userName: "mybot",
@@ -44,10 +44,13 @@ Route Photon's webhook to the adapter, for example in a Next.js route handler:
 ```ts
 // app/api/webhooks/photon/route.ts
 import { after } from "next/server";
+
 import { bot } from "@/lib/bot";
 
 export async function POST(request: Request) {
-  return bot.webhooks.photon(request, { waitUntil: (task) => after(() => task) });
+  return bot.webhooks.photon(request, {
+    waitUntil: (task) => after(() => task),
+  });
 }
 ```
 
@@ -71,12 +74,15 @@ On serverless, start it from a cron job that runs more often than the listener l
 ```ts
 // app/api/photon/gateway/route.ts
 import { after } from "next/server";
+
 import { bot } from "@/lib/bot";
 
 export const maxDuration = 800;
 
 export async function GET(request: Request) {
-  if (request.headers.get("authorization") !== `Bearer ${process.env.CRON_SECRET}`) {
+  if (
+    request.headers.get("authorization") !== `Bearer ${process.env.CRON_SECRET}`
+  ) {
     return new Response("Unauthorized", { status: 401 });
   }
   await bot.initialize();
@@ -99,9 +105,22 @@ Overlapping listeners are fine: Chat SDK drops a message it has already handled.
 | `PHOTON_PROJECT_ID` | `projectId` | The project's ID. Required. |
 | `PHOTON_API_KEY` | `apiKey` | The project API key. Required. |
 | `PHOTON_WEBHOOK_SECRET` | `webhookSecret` | The webhook destination's signing secret. Required to receive messages by webhook. |
+| `PHOTON_AGENT_USER_ID` | `agentUserId` | The Agent User (`pho_usr_...`) that `openDM` starts conversations from. Required for `openDM`. |
 | `PHOTON_API_URL` | `baseUrl` | API origin. Defaults to `https://api.photon.codes`. |
 
 Options passed to `createPhotonAdapter` take precedence over the environment.
+
+## Example
+
+[`examples/echo.ts`](examples/echo.ts) texts back whatever it receives, over the websocket. Text it from your own phone, not from another line in the same project: Photon reports the sender of a received message as a human even when it is your other line, so `message.author.isBot` is false and the two lines would echo each other until you stop the bot.
+
+```sh
+git clone https://github.com/photon-hq/chat-adapter && cd chat-adapter
+pnpm install && pnpm build
+PHOTON_PROJECT_ID=pho_prj_... PHOTON_API_KEY=pho_sk_... node examples/echo.ts
+```
+
+Building and checking the repo (`pnpm build`, `pnpm check`) needs Node 22.22.2 or newer, or 24.15 or newer, and that Node runs the TypeScript file as is. The published package itself runs on Node 20 or newer.
 
 ## Threads
 
@@ -118,6 +137,9 @@ Message authors use the sender's handle, or its user ID when a fallback user sna
 | Streaming | Collected and sent once, complete |
 | `edit` / `delete` | `message.update` / `message.delete`, where the platform supports them |
 | `addReaction` | `reaction`, where the platform supports it |
+| `openDM` | The direct Space between `agentUserId` and the user, created if needed |
+| `onReaction` | Inbound `reaction` Messages, and removals (a `message.delete` of a reaction Message) |
+| `onMessageUpdated` / `onMessageDeleted` | Inbound `message.update` / `message.delete`, carrying the original Message's ID |
 | `startTyping` | Space typing; a no-op where the platform has none |
 | `fetchMessages` | Space history, paginated |
 | `fetchThread` | The Space |
@@ -130,11 +152,9 @@ Markdown goes to Photon as Markdown, and each platform renders what it can (SMS 
 
 ## Not supported yet
 
-- `removeReaction`: Photon removes a reaction by deleting the reaction's own message, which the adapter doesn't track.
-- Starting a conversation (`openDM`): reply to inbound messages, or create the Space through the Photon API first.
-- Cards and modals: cards are sent as their fallback text.
-- Inbound reactions, edits, and deletes are acknowledged but not routed to handlers.
+- `removeReaction`: Chat SDK names a reaction by the message it's on and its emoji, but Photon removes a reaction by deleting the reaction's own message, which its API can't look up from the reacted message.
+- Cards and modals: Photon content has no buttons or other actions, so cards are sent as their fallback text and modals can't open.
 
 ## License
 
-MIT
+Apache-2.0

@@ -1,7 +1,32 @@
 {
   "name": "@photon-ai/chat-adapter",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "description": "Photon adapter for Chat SDK: iMessage, SMS, WhatsApp, Telegram, and email through one Photon project",
+  "keywords": [
+    "adapter",
+    "bot",
+    "chat-adapter",
+    "chat-sdk",
+    "email",
+    "imessage",
+    "photon",
+    "sms",
+    "telegram",
+    "whatsapp"
+  ],
+  "homepage": "https://github.com/photon-hq/chat-adapter",
+  "bugs": {
+    "url": "https://github.com/photon-hq/chat-adapter/issues"
+  },
+  "license": "Apache-2.0",
+  "author": "photon",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/photon-hq/chat-adapter.git"
+  },
+  "files": [
+    "dist"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -12,22 +37,16 @@
       "import": "./dist/index.js"
     }
   },
-  "files": [
-    "dist"
-  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "build": "tsup",
+    "build": "tsdown",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "check": "ultracite check",
     "fix": "ultracite fix",
     "clean": "rm -rf dist"
-  },
-  "engines": {
-    "node": ">=20"
-  },
-  "peerDependencies": {
-    "chat": "^4.44.0"
   },
   "dependencies": {
     "@chat-adapter/shared": "^4.44.0",
@@ -35,41 +54,23 @@
     "socket.io-client": "^4.8.4"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.2",
     "@chat-adapter/state-memory": "^4.44.0",
     "@types/mime-types": "^3.0.1",
     "@types/node": "^22.20.5",
     "chat": "^4.44.0",
+    "oxfmt": "^0.75.0",
+    "oxlint": "^1.91.0",
     "socket.io": "^4.8.4",
-    "tsup": "^8.5.1",
+    "tsdown": "^0.23.5",
     "typescript": "^5.9.3",
-    "ultracite": "7.8.4",
+    "ultracite": "8.1.1",
     "vitest": "^4.1.12"
   },
-  "publishConfig": {
-    "access": "public"
+  "peerDependencies": {
+    "chat": "^4.44.0"
   },
-  "keywords": [
-    "chat-sdk",
-    "chat-adapter",
-    "photon",
-    "imessage",
-    "sms",
-    "whatsapp",
-    "telegram",
-    "email",
-    "bot",
-    "adapter"
-  ],
-  "author": "photon",
-  "license": "MIT",
-  "packageManager": "pnpm@12.11.2",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/photon-hq/chat-adapter.git"
+  "engines": {
+    "node": ">=20"
   },
-  "homepage": "https://github.com/photon-hq/chat-adapter",
-  "bugs": {
-    "url": "https://github.com/photon-hq/chat-adapter/issues"
-  }
+  "packageManager": "pnpm@12.11.2"
 }

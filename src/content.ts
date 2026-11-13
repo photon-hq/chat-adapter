@@ -1,6 +1,7 @@
 import { cardToFallbackText, extractCard } from "@chat-adapter/shared";
 import type { AdapterPostableMessage, Attachment, Root } from "chat";
 import { parseMarkdown, stringifyMarkdown } from "chat";
+
 import type { PhotonContent } from "./types";
 
 export interface ContentParts {
@@ -13,12 +14,13 @@ export interface ContentParts {
 /** Reads the text and attachments a Chat SDK message can carry out of Photon content. */
 export function readContent(content: PhotonContent): ContentParts {
   switch (content.type) {
-    case "text":
+    case "text": {
       return {
         text: content.text as string,
         markdown: content.format === "markdown",
         attachmentIds: [],
       };
+    }
     case "attachment":
     case "voice": {
       const caption = (
@@ -41,8 +43,9 @@ export function readContent(content: PhotonContent): ContentParts {
         attachmentIds: parts.flatMap((part) => part.attachmentIds),
       };
     }
-    default:
+    default: {
       return { text: "", markdown: false, attachmentIds: [] };
+    }
   }
 }
 
@@ -66,7 +69,6 @@ export function toTextContent(
   if ("ast" in message) {
     return markdownText(message.ast);
   }
-  return;
 }
 
 export function attachmentType(mimeType?: string): Attachment["type"] {
