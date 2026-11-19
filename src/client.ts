@@ -5,7 +5,7 @@ import type { FileUpload } from "chat";
 import { NotImplementedError } from "chat";
 import { lookup } from "mime-types";
 
-import { NAME } from "./constants";
+import { API_VERSION, NAME } from "./constants";
 import type { PhotonAttachment } from "./types";
 
 export interface PhotonApiOptions {
@@ -37,7 +37,10 @@ export class PhotonClient {
     init: RequestOptions = {}
   ): Promise<Response> {
     const { apiKey, baseUrl, projectId } = this.options;
-    const headers = new Headers({ authorization: `Bearer ${apiKey}` });
+    const headers = new Headers({
+      authorization: `Bearer ${apiKey}`,
+      "Photon-Version": API_VERSION,
+    });
     if (init.json !== undefined) {
       headers.set("content-type", "application/json");
     }

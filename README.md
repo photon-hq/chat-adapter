@@ -110,6 +110,8 @@ Overlapping listeners are fine: Chat SDK drops a message it has already handled.
 
 Options passed to `createPhotonAdapter` take precedence over the environment.
 
+The adapter pins the Photon API date it was built for; upgrade the adapter to move to a newer date.
+
 ## Example
 
 [`examples/echo.ts`](examples/echo.ts) texts back whatever it receives, over the websocket. Text it from your own phone, not from another line in the same project: Photon reports the sender of a received message as a human even when it is your other line, so `message.author.isBot` is false and the two lines would echo each other until you stop the bot.

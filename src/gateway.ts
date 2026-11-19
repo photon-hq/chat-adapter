@@ -3,11 +3,9 @@ import { io } from "socket.io-client";
 import type { Socket } from "socket.io-client";
 
 import type { PhotonApiOptions } from "./client";
-import { NAME } from "./constants";
+import { API_VERSION, NAME } from "./constants";
 import type { PhotonEvent } from "./types";
 
-// The event contract this adapter parses; each subscription pins it.
-const API_VERSION = "2026-07-01";
 const SUBSCRIBE_TIMEOUT_MS = 10_000;
 
 interface DeliveryError {
