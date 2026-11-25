@@ -22,7 +22,11 @@ interface ServerEvents {
 interface ClientEvents {
   subscribe: (
     input: { apiVersion: string; startSeq: number },
-    ack: (result: { ok: true } | { error: DeliveryError; ok: false }) => void
+    ack: (
+      result:
+        | { ok: true; startSeq?: number }
+        | { error: DeliveryError; ok: false }
+    ) => void
   ) => void;
 }
 
@@ -53,6 +57,9 @@ export async function listenForEvents({
   const cursorKey = `${NAME}:cursor:${projectId}`;
   let cursor = (await state.get<number>(cursorKey)) ?? 0;
   let queue = Promise.resolve();
+  const enqueue = (task: () => void | Promise<void>) => {
+    queue = queue.then(task);
+  };
 
   let stop!: () => void;
   // oxlint-disable-next-line promise/avoid-new -- settles when any of the stop conditions below fires
@@ -60,25 +67,61 @@ export async function listenForEvents({
     stop = resolve;
   });
 
+  const saveCursor = async (seq: number) => {
+    if (seq <= cursor) {
+      return;
+    }
+    await state.set(cursorKey, seq);
+    cursor = seq;
+  };
+  const seedCursor = async (startSeq: number) => {
+    if (cursor !== 0) {
+      return;
+    }
+    try {
+      await saveCursor(startSeq);
+    } catch (error) {
+      logger?.error("Photon websocket cursor failed", {
+        seq: startSeq,
+        error: String(error),
+      });
+    }
+  };
   const socket: Socket<ServerEvents, ClientEvents> = io(baseUrl, {
     path: `/v1/projects/${projectId}/events/ws`,
     addTrailingSlash: false,
     transports: ["websocket"],
     extraHeaders: { authorization: `Bearer ${apiKey}` },
   });
-  socket.on("connect", () => {
+  const isCurrentConnection = (connectionId: string | undefined) =>
+    socket.connected && socket.id === connectionId;
+  const subscribe = (connectionId: string | undefined) => {
+    if (!isCurrentConnection(connectionId)) {
+      return;
+    }
     socket
       .timeout(SUBSCRIBE_TIMEOUT_MS)
       .emit(
         "subscribe",
         { startSeq: cursor, apiVersion: API_VERSION },
         (timedOut, result) => {
+          if (!isCurrentConnection(connectionId)) {
+            return;
+          }
           if (timedOut) {
             // Closing the transport makes Socket.IO reconnect and subscribe again.
             socket.io.engine.close();
             return;
           }
           if (result.ok) {
+            const { startSeq } = result;
+            if (
+              startSeq !== undefined &&
+              Number.isSafeInteger(startSeq) &&
+              startSeq > 0
+            ) {
+              enqueue(() => seedCursor(startSeq));
+            }
             return;
           }
           logger?.error("Photon websocket subscription rejected", {
@@ -90,6 +133,10 @@ export async function listenForEvents({
           }
         }
       );
+  };
+  socket.on("connect", () => {
+    const connectionId = socket.id;
+    enqueue(() => subscribe(connectionId));
   });
   const deliver = async (event: PhotonEvent, seq: number) => {
     if (seq <= cursor) {
@@ -98,8 +145,7 @@ export async function listenForEvents({
     // An event that fails is logged and skipped, so one bad payload can't stall the stream.
     try {
       onEvent(event);
-      await state.set(cursorKey, seq);
-      cursor = seq;
+      await saveCursor(seq);
     } catch (error) {
       logger?.error("Photon websocket event failed", {
         seq,
@@ -108,7 +154,7 @@ export async function listenForEvents({
     }
   };
   socket.on("delivery", (event, { seq }) => {
-    queue = queue.then(() => deliver(event, seq));
+    enqueue(() => deliver(event, seq));
   });
   socket.on("delivery_error", (error) => {
     logger?.warn("Photon websocket delivery error", { ...error });
